@@ -264,3 +264,13 @@
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-3px); }
 }
+
+/* Hide Next.js dev indicator pill */
+nextjs-portal,
+[data-nextjs-toast],
+[data-next-badge],
+div[data-nextjs-dev-tools-button],
+#next-route-announcer {
+  display: none !important;
+}
+
