@@ -5,7 +5,7 @@ import { getSiteUrl } from "@/lib/site";
 import { fetchBackend } from "@/server/backend-api";
 import { getServerSession } from "@/server/session";
 
-const SUPPORTED_PROVIDERS = new Set(["youtube", "tiktok", "instagram"]);
+const SUPPORTED_PROVIDERS = new Set(["youtube", "tiktok", "instagram", "linkedin", "twitter"]);
 
 function settingsRedirect(query: Record<string, string>) {
   const url = new URL("/settings/social", getSiteUrl());

@@ -9,19 +9,25 @@ from typing import Any, Dict, List, Optional, Type
 from ..config import Config, get_config
 from .base import SUPPORTED_PROVIDERS, SocialProvider
 from .instagram import InstagramProvider
+from .linkedin import LinkedInProvider
 from .tiktok import TikTokProvider
+from .twitter import TwitterProvider
 from .youtube import YouTubeProvider
 
 _PROVIDER_CLASSES: Dict[str, Type[SocialProvider]] = {
     "youtube": YouTubeProvider,
     "tiktok": TikTokProvider,
     "instagram": InstagramProvider,
+    "linkedin": LinkedInProvider,
+    "twitter": TwitterProvider,
 }
 
 PROVIDER_SETUP_HINTS = {
     "youtube": "Set YOUTUBE_OAUTH_CLIENT_ID and YOUTUBE_OAUTH_CLIENT_SECRET from a Google Cloud OAuth client.",
     "tiktok": "Set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET from the TikTok for Developers portal.",
     "instagram": "Set INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET from a Meta app with Instagram Login.",
+    "linkedin": "Set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET from the LinkedIn Developer Portal.",
+    "twitter": "Set TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET from the X Developer Portal.",
 }
 
 

@@ -18,6 +18,7 @@ class Config:
         self.openrouter_fallback_model = self._get_optional_env("OPENROUTER_FALLBACK_MODEL") or "openai/gpt-6-luna"
         self.anthropic_api_key = self._get_runtime_setting("ANTHROPIC_API_KEY")
         self.google_api_key = self._get_runtime_setting("GOOGLE_API_KEY")
+        self.gemini_api_key = self._get_runtime_setting("GEMINI_API_KEY") or self.google_api_key
         self.youtube_data_api_key = self._get_runtime_setting("YOUTUBE_DATA_API_KEY")
         self.ollama_base_url = self._get_runtime_setting("OLLAMA_BASE_URL")
         self.ollama_api_key = self._get_runtime_setting("OLLAMA_API_KEY")
@@ -269,6 +270,15 @@ class Config:
         self.instagram_app_secret = self._get_optional_env(
             "INSTAGRAM_APP_SECRET"
         ) or self._get_optional_env("META_APP_SECRET")
+        self.linkedin_client_id = self._get_optional_env("LINKEDIN_CLIENT_ID")
+        self.linkedin_client_secret = self._get_optional_env("LINKEDIN_CLIENT_SECRET")
+        self.twitter_client_id = self._get_optional_env("TWITTER_CLIENT_ID") or self._get_optional_env("X_CLIENT_ID")
+        self.twitter_client_secret = self._get_optional_env("TWITTER_CLIENT_SECRET") or self._get_optional_env("X_CLIENT_SECRET")
+        self.twitter_bearer_token = self._get_optional_env("TWITTER_BEARER_TOKEN") or self._get_optional_env("X_BEARER_TOKEN")
+        self.twitter_api_key = self._get_optional_env("TWITTER_API_KEY") or self._get_optional_env("X_API_KEY")
+        self.twitter_api_secret = self._get_optional_env("TWITTER_API_SECRET") or self._get_optional_env("X_API_SECRET")
+        self.twitter_access_token = self._get_optional_env("TWITTER_ACCESS_TOKEN") or self._get_optional_env("X_ACCESS_TOKEN")
+        self.twitter_access_secret = self._get_optional_env("TWITTER_ACCESS_SECRET") or self._get_optional_env("X_ACCESS_SECRET")
         # OAuth callbacks and public media fetches (Instagram pulls the video
         # from a URL) both go through the frontend, so they default to the
         # public app URL.
@@ -306,13 +316,13 @@ class Config:
         self.social_publishing_providers = frozenset(
             provider.strip().lower()
             for provider in os.getenv(
-                "SOCIAL_PUBLISHING_PROVIDERS", "youtube,tiktok,instagram"
+                "SOCIAL_PUBLISHING_PROVIDERS", "youtube,tiktok,instagram,linkedin,twitter"
             ).split(",")
             if provider.strip()
         )
-        if self.social_publishing_providers - {"youtube", "tiktok", "instagram"}:
+        if self.social_publishing_providers - {"youtube", "tiktok", "instagram", "linkedin", "twitter"}:
             raise ValueError(
-                "SOCIAL_PUBLISHING_PROVIDERS may only include youtube, tiktok, instagram"
+                "SOCIAL_PUBLISHING_PROVIDERS may only include youtube, tiktok, instagram, linkedin, twitter"
             )
         self.social_publishing_allowed_emails = frozenset(
             email.strip().lower()
@@ -473,7 +483,7 @@ class Config:
     @staticmethod
     def _normalize_transcription_provider(value: str | None) -> str:
         normalized = (value or "").strip().lower().replace("-", "_")
-        if normalized in ("whisper", "youtube_captions"):
+        if normalized in ("whisper", "youtube_captions", "gemini"):
             return normalized
         return "assemblyai"
 

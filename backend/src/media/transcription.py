@@ -331,6 +331,9 @@ def get_video_transcript(
     runtime_config = get_config()
     provider = runtime_config.transcription_provider
 
+    if provider == "gemini":
+        from .gemini_transcription import get_transcript_with_gemini
+        return get_transcript_with_gemini(video_path, runtime_config)
     if provider == "whisper":
         return _get_transcript_with_whisper(video_path, runtime_config)
     if provider == "youtube_captions":

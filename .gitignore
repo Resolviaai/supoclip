@@ -25,3 +25,10 @@ docs/youtube-provider-registry*.json
 
 # Local agent checkouts
 .claude/worktrees/
+
+# Python virtual environments
+.venv/
+
+# Auto-updater runtime artifacts
+auto_updater.log
+auto_updater_status.json
