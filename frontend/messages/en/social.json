@@ -113,7 +113,10 @@
     "analytics": "Analytics",
     "analyticsHint": "Views, likes and comments from your published clips, by platform, hook and length.",
     "tiktokPaused": "TikTok publishing is paused while we fix an issue with TikTok. Your other platforms work as usual.",
-    "paused": "Paused"
+    "paused": "Paused",
+    "facebookNote": "Facebook Reels and video publishing to your Pages.",
+    "linkedinNote": "LinkedIn video and post publishing to your personal profile or company pages.",
+    "twitterNote": "X / Twitter video posting with chunked media upload."
   },
   "accounts": "Accounts",
   "accountsHint": "Select one or more accounts. Your title, caption and hashtags are shared.",

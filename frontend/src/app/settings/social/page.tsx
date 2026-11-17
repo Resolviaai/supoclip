@@ -252,7 +252,7 @@ function SocialSettingsContent() {
                         </TooltipTrigger>
                         <TooltipContent className="max-w-xs space-y-2" sideOffset={6}>
                           {!provider.configured && <p>{provider.paused ? t("page.tiktokPaused") : t("page.verificationNote")}</p>}
-                          <p>{t(`page.${provider.provider}Note`)}</p>
+                          {t.has(`page.${provider.provider}Note`) && <p>{t(`page.${provider.provider}Note`)}</p>}
                         </TooltipContent>
                       </Tooltip>
                       {provider.configured && (

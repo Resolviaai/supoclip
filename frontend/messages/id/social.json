@@ -113,7 +113,10 @@
     "analytics": "Analitik",
     "analyticsHint": "Penayangan, suka, dan komentar dari clip yang kamu publikasikan, menurut platform, hook, dan durasi.",
     "tiktokPaused": "Publikasi ke TikTok dijeda sementara kami memperbaiki masalah dengan TikTok. Platform lainnya tetap berfungsi seperti biasa.",
-    "paused": "Dijeda"
+    "paused": "Dijeda",
+    "facebookNote": "Penerbitan Facebook Reels dan video ke Halaman Anda.",
+    "linkedinNote": "Penerbitan video dan postingan LinkedIn ke profil pribadi atau halaman perusahaan Anda.",
+    "twitterNote": "Posting video X / Twitter dengan pengunggahan media terfragmentasi."
   },
   "accounts": "Akun",
   "accountsHint": "Pilih satu atau beberapa akun. Judul, keterangan, dan tagar digunakan bersama.",

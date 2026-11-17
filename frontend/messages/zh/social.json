@@ -113,7 +113,10 @@
     "analytics": "数据分析",
     "analyticsHint": "已发布片段的观看、点赞和评论，按平台、钩子和时长查看。",
     "tiktokPaused": "我们正在修复 TikTok 的一个问题，TikTok 发布暂时暂停。其他平台照常可用。",
-    "paused": "已暂停"
+    "paused": "已暂停",
+    "facebookNote": "将 Facebook Reels 和视频发布到您的公共主页。",
+    "linkedinNote": "将 LinkedIn 视频和动态发布到您的个人资料或企业主页。",
+    "twitterNote": "通过分块媒体上传在 X / Twitter 上发布视频。"
   },
   "accounts": "账号",
   "accountsHint": "选择一个或多个账号。标题、文案和话题标签将共用。",

@@ -113,7 +113,10 @@
     "analytics": "Análises",
     "analyticsHint": "Visualizações, curtidas e comentários dos seus clipes publicados, por plataforma, gancho e duração.",
     "tiktokPaused": "A publicação no TikTok está pausada enquanto corrigimos um problema com o TikTok. As suas outras plataformas funcionam normalmente.",
-    "paused": "Pausado"
+    "paused": "Pausado",
+    "facebookNote": "Publicação de Facebook Reels e vídeos nas suas Páginas.",
+    "linkedinNote": "Publicação de vídeos e postagens do LinkedIn no seu perfil ou páginas da empresa.",
+    "twitterNote": "Publicação de vídeos no X / Twitter com upload de mídia em partes."
   },
   "accounts": "Contas",
   "accountsHint": "Selecione uma ou mais contas. O título, a legenda e as hashtags são compartilhados.",
