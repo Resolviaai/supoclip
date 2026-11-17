@@ -351,13 +351,13 @@ CREATE TABLE feature_flags (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_feature_flags_updated_by ON feature_flags (updated_by);
--- Workflows stay off on web and iOS until the iOS build that has them is approved.
+-- Workflows enabled on web and iOS
 INSERT INTO feature_flags (key, description, web_enabled, ios_enabled, admins_bypass)
 VALUES (
     'workflows',
     'Series, topic, recap and trailer, plus instructions and Advanced settings. The WORKFLOWS_ACCESS env gate must allow them too.',
-    false,
-    false,
+    true,
+    true,
     true
 );
 INSERT INTO feature_flags (key, description, web_enabled, ios_enabled, admins_bypass)

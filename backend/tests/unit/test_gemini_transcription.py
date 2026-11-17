@@ -140,6 +140,17 @@ def test_chunk_words_into_utterances():
         assert len(c["words"]) > 0
 
 
+from src.media.transliteration import has_devanagari, phonetic_devanagari_to_roman
+
+
+def test_devanagari_transliteration():
+    sample_hindi = "तो या तो कैसे शुरू किया जाए? इस वीडियो का नाम है द कन्फेशन।"
+    assert has_devanagari(sample_hindi)
+    roman = phonetic_devanagari_to_roman(sample_hindi)
+    assert not has_devanagari(roman)
+    assert "kaise" in roman and "shuroo" in roman
+
+
 if __name__ == "__main__":
     test_parse_offset_seconds()
     test_parse_gemini_transcribe_response_valid()
@@ -147,4 +158,5 @@ if __name__ == "__main__":
     test_parse_gemini_fallback_response()
     test_gemini_llm_fallback_hierarchy()
     test_chunk_words_into_utterances()
+    test_devanagari_transliteration()
     print("ALL GEMINI TRANSCRIPTION & LLM FALLBACK TESTS PASSED!")

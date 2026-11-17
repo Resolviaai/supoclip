@@ -22,6 +22,7 @@ import requests
 
 from .common import TRANSCRIPT_CACHE_SCHEMA_VERSION, logger
 from .transcription import _prepare_audio_for_transcription
+from .transliteration import has_devanagari, phonetic_devanagari_to_roman
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta/files"
@@ -411,6 +412,21 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
     full_text = " ".join(text_pieces).strip() or " ".join(w["text"] for w in words).strip()
 
+    # Transliterate any Devanagari Hindi text to Roman Hinglish (English alphabet)
+    if any(has_devanagari(w.get("text", "")) for w in words) or has_devanagari(full_text):
+        logger.info("Transliterating Devanagari transcript into Roman Hinglish")
+        for w in words:
+            if has_devanagari(w.get("text", "")):
+                w["text"] = phonetic_devanagari_to_roman(w["text"])
+        for u in utterances:
+            if has_devanagari(u.get("text", "")):
+                u["text"] = phonetic_devanagari_to_roman(u["text"])
+            for uw in u.get("words", []):
+                if has_devanagari(uw.get("text", "")):
+                    uw["text"] = phonetic_devanagari_to_roman(uw["text"])
+        if has_devanagari(full_text):
+            full_text = phonetic_devanagari_to_roman(full_text)
+
     return {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
         "words": words,
@@ -507,11 +523,25 @@ def _parse_gemini_fallback_response(data: Dict[str, Any]) -> Dict[str, Any]:
             "words": seg_words,
         })
 
+    fallback_full_text = " ".join(full_text_pieces)
+    if any(has_devanagari(w.get("text", "")) for w in words) or has_devanagari(fallback_full_text):
+        for w in words:
+            if has_devanagari(w.get("text", "")):
+                w["text"] = phonetic_devanagari_to_roman(w["text"])
+        for u in utterances:
+            if has_devanagari(u.get("text", "")):
+                u["text"] = phonetic_devanagari_to_roman(u["text"])
+            for uw in u.get("words", []):
+                if has_devanagari(uw.get("text", "")):
+                    uw["text"] = phonetic_devanagari_to_roman(uw["text"])
+        if has_devanagari(fallback_full_text):
+            fallback_full_text = phonetic_devanagari_to_roman(fallback_full_text)
+
     return {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
         "words": words,
         "utterances": utterances,
-        "text": " ".join(full_text_pieces),
+        "text": fallback_full_text,
         "language_code": None,
     }
 

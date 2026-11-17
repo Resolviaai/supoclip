@@ -90,7 +90,7 @@ function sourceMoments(clip: WallClip): SourceRange[] | null {
   return Array.isArray(ranges) && ranges.length > 1 ? ranges : null;
 }
 
-export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen, onDownload, onDelete }: {
+export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen, onDownload, onDelete, publishAction }: {
   clip: WallClip;
   taskId: string;
   busy: boolean;
@@ -101,6 +101,7 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
   onOpen: () => void;
   onDownload: () => void;
   onDelete?: () => void;
+  publishAction?: React.ReactNode;
 }) {
   const t = useTranslations("task");
   const title = clipTitle(clip, t);
@@ -159,6 +160,7 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
               <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`}><Scissors className="size-3.5" />{t("edit")}</Link>
             </Button>
           )}
+          {publishAction}
           {onDelete && (
             <Button size="icon-sm" variant="ghost" className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={onDelete} aria-label={t("deleteClip")}>
               <Trash2 className="size-3.5" />

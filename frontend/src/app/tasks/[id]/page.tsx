@@ -851,6 +851,7 @@ export default function TaskPage() {
       onDownload={() => handleDownloadClip(clip)}
       onDelete={readOnly ? undefined : () => setDeletingClipId(clip.id)}
       editable={task?.status === "completed" && !readOnly}
+      publishAction={publishButton(clip)}
     />
   );
 

@@ -47,7 +47,7 @@ class FeatureFlag:
 
 
 DEFAULT_FLAGS: dict[str, FeatureFlag] = {
-    WORKFLOWS: FeatureFlag(WORKFLOWS),
+    WORKFLOWS: FeatureFlag(WORKFLOWS, web_enabled=True, ios_enabled=True),
     TIKTOK_PUBLISHING: FeatureFlag(TIKTOK_PUBLISHING, admins_bypass=False),
 }
 
