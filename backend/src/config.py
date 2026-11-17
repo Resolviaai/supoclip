@@ -525,15 +525,15 @@ class Config:
         Infer a usable default model based on whichever API key is present.
         Falls back to Google for backward compatibility.
         """
-        if self.google_api_key:
-            return "google-gla:gemini-3-flash-preview"
+        if self.google_api_key or self.gemini_api_key:
+            return "google-gla:gemini-3.5-flash-lite"
         if self.openai_api_key:
             return "openai:gpt-5.2"
         if self.anthropic_api_key:
             return "anthropic:claude-4-sonnet"
         if self.openrouter_api_key:
             return "openrouter:anthropic/claude-sonnet-5.5"
-        return "google-gla:gemini-3-flash-preview"
+        return "google-gla:gemini-3.5-flash-lite"
 
 
 def get_config() -> Config:

@@ -1132,6 +1132,19 @@ def _is_transient_model_error(error: Exception) -> bool:
     return False
 
 
+def _get_gemini_fallback_model(model_name: str) -> Optional[str]:
+    """Return fallback model name when using Google models (e.g. 3.5-flash-lite -> 3.1-flash-lite)."""
+    provider, name = _split_llm_name(model_name or "")
+    if provider in {"google", "google-gla"}:
+        if name == "gemini-3.5-flash-lite":
+            return f"{provider}:gemini-3.1-flash-lite"
+        elif name == "gemini-3.1-flash-lite":
+            return f"{provider}:gemini-2.5-flash-lite"
+        elif name in {"gemini-3.5-flash", "gemini-3-flash-preview"}:
+            return f"{provider}:gemini-3.1-flash-lite"
+    return None
+
+
 async def _run_transcript_analysis(
     agent: Agent,
     prompt: str,
@@ -1154,9 +1167,34 @@ async def _run_transcript_analysis(
                         logger.info("AI analysis completed using model %s", result.response.model_name)
                     return result
                 except Exception as error:
+                    fb_model = _get_gemini_fallback_model(get_config().llm)
                     if not _is_transient_model_error(error):
+                        if fb_model:
+                            logger.warning(
+                                "AI analysis encountered error (%s) on primary model %s. Retrying with fallback %s",
+                                error,
+                                get_config().llm,
+                                fb_model,
+                            )
+                            try:
+                                result = await agent.run(prompt, model=fb_model)
+                                logger.info("AI analysis completed using fallback model %s", fb_model)
+                                return result
+                            except Exception as fb_err:
+                                logger.error("Fallback model %s failed: %s", fb_model, fb_err)
                         raise
                     if attempt == TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS:
+                        if fb_model:
+                            logger.warning(
+                                "Primary model exhausted attempts. Trying fallback model: %s",
+                                fb_model,
+                            )
+                            try:
+                                result = await agent.run(prompt, model=fb_model)
+                                logger.info("AI analysis completed using fallback model %s", fb_model)
+                                return result
+                            except Exception as fb_err:
+                                logger.error("Fallback model %s failed: %s", fb_model, fb_err)
                         logger.error(
                             "AI analysis unavailable after %s attempts (%s, HTTP status %s)",
                             attempt,

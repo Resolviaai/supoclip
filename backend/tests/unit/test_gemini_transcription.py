@@ -6,8 +6,10 @@ from unittest.mock import MagicMock, patch
 from src.media.gemini_transcription import (
     _parse_offset_seconds,
     _parse_gemini_transcribe_response,
+    _parse_gemini_fallback_response,
     TRANSCRIPT_CACHE_SCHEMA_VERSION,
 )
+from src.ai import _get_gemini_fallback_model
 
 
 def test_parse_offset_seconds():
@@ -70,3 +72,54 @@ def test_parse_gemini_transcribe_response_empty():
     assert res["version"] == TRANSCRIPT_CACHE_SCHEMA_VERSION
     assert res["words"] == []
     assert res["text"] == ""
+
+
+def test_parse_gemini_fallback_response():
+    sample_json = [
+        {
+            "start": 0.0,
+            "end": 2.5,
+            "speaker": "Speaker 1",
+            "text": "Welcome to SupoClip AI video clipping.",
+            "words": [
+                {"word": "Welcome", "start": 0.0, "end": 0.4},
+                {"word": "to", "start": 0.4, "end": 0.6},
+                {"word": "SupoClip", "start": 0.6, "end": 1.2},
+            ]
+        }
+    ]
+    raw_response = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "```json\n" + json.dumps(sample_json) + "\n```"}
+                    ]
+                }
+            }
+        ]
+    }
+    result = _parse_gemini_fallback_response(raw_response)
+    assert result["version"] == TRANSCRIPT_CACHE_SCHEMA_VERSION
+    assert len(result["utterances"]) == 1
+    assert len(result["words"]) == 3
+    assert result["words"][0]["text"] == "Welcome"
+    assert result["words"][0]["start"] == 0
+    assert result["words"][0]["end"] == 400
+    assert "Welcome to SupoClip" in result["text"]
+
+
+def test_gemini_llm_fallback_hierarchy():
+    assert _get_gemini_fallback_model("google-gla:gemini-3.5-flash-lite") == "google-gla:gemini-3.1-flash-lite"
+    assert _get_gemini_fallback_model("google:gemini-3.5-flash-lite") == "google:gemini-3.1-flash-lite"
+    assert _get_gemini_fallback_model("google-gla:gemini-3.1-flash-lite") == "google-gla:gemini-2.5-flash-lite"
+    assert _get_gemini_fallback_model("openai:gpt-5.2") is None
+
+
+if __name__ == "__main__":
+    test_parse_offset_seconds()
+    test_parse_gemini_transcribe_response_valid()
+    test_parse_gemini_transcribe_response_empty()
+    test_parse_gemini_fallback_response()
+    test_gemini_llm_fallback_hierarchy()
+    print("ALL GEMINI TRANSCRIPTION & LLM FALLBACK TESTS PASSED!")

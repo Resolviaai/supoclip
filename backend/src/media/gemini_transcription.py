@@ -2,7 +2,8 @@
 
 Provides high-accuracy transcription with speaker diarization and word timestamps using:
 1. Primary: gemini-3.5-transcribe (official audioTranscriptionConfig with word timestamps & diarization)
-2. Fallback: gemini-3.5-flash / gemini-3.1-flash with structured JSON timestamp extraction
+2. First Fallback: gemini-3.5-flash-lite with structured JSON timestamp extraction
+3. Second Fallback: gemini-3.1-flash-lite with structured JSON timestamp extraction
 Zero conflict design: completely self-contained module.
 """
 
@@ -230,7 +231,7 @@ def _generate_with_gemini_transcribe(
 
 
 def _generate_with_gemini_flash_fallback(
-    file_uri: str, api_key: str, model_name: str = "gemini-3.5-flash", language: Optional[str] = None
+    file_uri: str, api_key: str, model_name: str = "gemini-3.5-flash-lite", language: Optional[str] = None
 ) -> Dict[str, Any]:
     """Fallback: Structured timestamped transcription using Gemini Flash."""
     endpoint = f"{GEMINI_API_BASE}/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -476,9 +477,14 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
         except Exception as primary_err:
             logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
 
-        # 2. Fallback: gemini-3.5-flash / gemini-3.1-flash
+        # 2. Fallback: gemini-3.5-flash-lite -> gemini-3.1-flash-lite -> gemini-3.5-flash
         if not transcript_data:
-            fallback_models = ["gemini-3.5-flash", "gemini-3.1-flash"]
+            fallback_models = [
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-3.5-flash",
+                "gemini-3.1-flash",
+            ]
             last_fallback_err = None
             for f_model in fallback_models:
                 try:
