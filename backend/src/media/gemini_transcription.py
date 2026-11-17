@@ -282,6 +282,73 @@ def _generate_with_gemini_flash_fallback(
     return response.json()
 
 
+def _chunk_words_into_utterances(
+    words: List[Dict[str, Any]], target_chunk_size: int = 15
+) -> List[Dict[str, Any]]:
+    """Chunk flat list of timestamped words into discrete, natural utterances.
+
+    Splits when:
+    - Speaker changes.
+    - Silence gap between words exceeds 1.0 second (1000 ms).
+    - Punctuation indicates sentence end (. ? ! । ...) and chunk has >= 5 words.
+    - Chunk reaches target_chunk_size words.
+    """
+    if not words:
+        return []
+
+    utterances: List[Dict[str, Any]] = []
+    current_chunk: List[Dict[str, Any]] = []
+
+    for w in words:
+        if not current_chunk:
+            current_chunk.append(w)
+            continue
+
+        prev_w = current_chunk[-1]
+        pause_gap = w.get("start", 0) - prev_w.get("end", 0)
+        speaker_changed = (w.get("speaker") != current_chunk[0].get("speaker"))
+        prev_text = str(prev_w.get("text") or "").strip()
+        ends_sentence = prev_text.endswith((".", "?", "!", "।", "...", "…"))
+
+        should_split = (
+            speaker_changed
+            or pause_gap >= 1000
+            or (ends_sentence and len(current_chunk) >= 5)
+            or len(current_chunk) >= target_chunk_size
+        )
+
+        if should_split and current_chunk:
+            u_start = current_chunk[0]["start"]
+            u_end = current_chunk[-1]["end"]
+            spk = current_chunk[0].get("speaker", "spk_1")
+            text = " ".join(str(item.get("text") or "") for item in current_chunk).strip()
+            utterances.append({
+                "text": text,
+                "start": u_start,
+                "end": max(u_end, u_start + 100),
+                "speaker": spk,
+                "words": current_chunk,
+            })
+            current_chunk = [w]
+        else:
+            current_chunk.append(w)
+
+    if current_chunk:
+        u_start = current_chunk[0]["start"]
+        u_end = current_chunk[-1]["end"]
+        spk = current_chunk[0].get("speaker", "spk_1")
+        text = " ".join(str(item.get("text") or "") for item in current_chunk).strip()
+        utterances.append({
+            "text": text,
+            "start": u_start,
+            "end": max(u_end, u_start + 100),
+            "speaker": spk,
+            "words": current_chunk,
+        })
+
+    return utterances
+
+
 def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """Parse gemini-3.5-transcribe response with word timestamps and speaker diarization."""
     words: List[Dict[str, Any]] = []
@@ -332,6 +399,15 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
                     "speaker": spk,
                     "words": seg_words,
                 })
+
+    # If single-speaker audio collapsed all words into 1 massive utterance, re-chunk into natural segments
+    if len(utterances) <= 1 and len(words) > 20:
+        logger.info(
+            "gemini-3.5-transcribe returned %d utterances for %d words; re-chunking into granular utterances",
+            len(utterances),
+            len(words),
+        )
+        utterances = _chunk_words_into_utterances(words)
 
     full_text = " ".join(text_pieces).strip() or " ".join(w["text"] for w in words).strip()
 
@@ -522,6 +598,10 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
     # Format transcript lines for AI clip analysis
     formatted_lines: List[str] = []
     utterances = transcript_data.get("utterances") or []
+    if len(utterances) <= 1 and len(transcript_data.get("words", [])) > 20:
+        utterances = _chunk_words_into_utterances(transcript_data["words"])
+        transcript_data["utterances"] = utterances
+
     if utterances:
         for u in utterances:
             start_str = format_ms_to_timestamp(u.get("start", 0))

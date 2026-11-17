@@ -7,6 +7,7 @@ from src.media.gemini_transcription import (
     _parse_offset_seconds,
     _parse_gemini_transcribe_response,
     _parse_gemini_fallback_response,
+    _chunk_words_into_utterances,
     TRANSCRIPT_CACHE_SCHEMA_VERSION,
 )
 from src.ai import _get_gemini_fallback_model
@@ -116,10 +117,34 @@ def test_gemini_llm_fallback_hierarchy():
     assert _get_gemini_fallback_model("openai:gpt-5.2") is None
 
 
+def test_chunk_words_into_utterances():
+    # 25 words with punctuation and pause
+    words = []
+    for i in range(25):
+        punctuation = "." if i in (9, 19) else ""
+        gap = 1500 if i == 15 else 100
+        start = i * 500 + gap
+        words.append({
+            "text": f"word{i}{punctuation}",
+            "start": start,
+            "end": start + 300,
+            "speaker": "speaker_0",
+        })
+    chunks = _chunk_words_into_utterances(words, target_chunk_size=15)
+    assert len(chunks) >= 2
+    for c in chunks:
+        assert "text" in c
+        assert "start" in c
+        assert "end" in c
+        assert c["end"] > c["start"]
+        assert len(c["words"]) > 0
+
+
 if __name__ == "__main__":
     test_parse_offset_seconds()
     test_parse_gemini_transcribe_response_valid()
     test_parse_gemini_transcribe_response_empty()
     test_parse_gemini_fallback_response()
     test_gemini_llm_fallback_hierarchy()
+    test_chunk_words_into_utterances()
     print("ALL GEMINI TRANSCRIPTION & LLM FALLBACK TESTS PASSED!")
