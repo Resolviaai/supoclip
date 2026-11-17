@@ -243,7 +243,7 @@ def _generate_with_gemini_flash_fallback(
         "Transcribe the spoken audio verbatim in the original spoken language. "
         "If speakers switch between English and Hindi (Hinglish), transcribe naturally using Latin / English script. "
         "Provide exact timestamps and speaker labels in JSON array format: "
-        '[{"start": 0.0, "end": 2.5, "speaker": "Speaker 1", "text": "...", "words": [{"word": "...", "start": 0.0, "end": 0.5}]}] '
+        '[{"start": 0.0, "end": 2.5, "speaker": "Speaker 1", "text": "sentence or phrase here"}] '
         "Return ONLY the valid JSON array."
     )
 
@@ -267,6 +267,7 @@ def _generate_with_gemini_flash_fallback(
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.0,
+            "maxOutputTokens": 8192,
         },
     }
 
@@ -453,16 +454,32 @@ def _parse_gemini_fallback_response(data: Dict[str, Any]) -> Dict[str, Any]:
         if len(lines) >= 2 and lines[0].startswith("```"):
             raw_text = "\n".join(lines[1:-1 if lines[-1].startswith("```") else len(lines)]).strip()
 
+    segments = None
     try:
         segments = json.loads(raw_text)
     except Exception as e:
-        # Fallback extract JSON array
+        # Fallback 1: Extract slice between outer brackets
         start_bracket = raw_text.find("[")
         end_bracket = raw_text.rfind("]")
         if start_bracket != -1 and end_bracket > start_bracket:
-            segments = json.loads(raw_text[start_bracket:end_bracket + 1])
-        else:
-            raise GeminiTranscriptionError(f"Failed to parse Gemini Flash JSON output: {raw_text[:200]}") from e
+            try:
+                segments = json.loads(raw_text[start_bracket:end_bracket + 1])
+            except Exception:
+                pass
+
+        # Fallback 2: Truncated JSON array repair (find last complete '}' and close array)
+        if segments is None and start_bracket != -1:
+            last_brace = raw_text.rfind("}")
+            if last_brace > start_bracket:
+                try:
+                    repaired = raw_text[start_bracket:last_brace + 1] + "\n]"
+                    segments = json.loads(repaired)
+                    logger.info("Successfully recovered %d segments from truncated Gemini JSON response", len(segments))
+                except Exception:
+                    pass
+
+    if not isinstance(segments, list):
+        raise GeminiTranscriptionError(f"Failed to parse Gemini Flash JSON output: {raw_text[:200]}")
 
     words: List[Dict[str, Any]] = []
     utterances: List[Dict[str, Any]] = []
@@ -583,13 +600,13 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
         except Exception as primary_err:
             logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
 
-        # 2. Fallback: gemini-3.5-flash-lite -> gemini-3.1-flash-lite -> gemini-3.5-flash
+        # 2. Fallback: gemini-2.5-flash-lite -> gemini-3.1-flash-lite -> gemini-3.5-flash-lite -> gemini-2.5-pro
         if not transcript_data:
             fallback_models = [
-                "gemini-3.5-flash-lite",
+                "gemini-2.5-flash-lite",
                 "gemini-3.1-flash-lite",
-                "gemini-3.5-flash",
-                "gemini-3.1-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-2.5-pro",
             ]
             last_fallback_err = None
             for f_model in fallback_models:
