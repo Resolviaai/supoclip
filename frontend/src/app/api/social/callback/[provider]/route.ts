@@ -5,7 +5,7 @@ import { getSiteUrl } from "@/lib/site";
 import { fetchBackend } from "@/server/backend-api";
 import { getServerSession } from "@/server/session";
 
-const SUPPORTED_PROVIDERS = new Set(["youtube", "tiktok", "instagram"]);
+const SUPPORTED_PROVIDERS = new Set(["youtube", "tiktok", "instagram", "linkedin", "twitter", "facebook"]);
 const MOBILE_STATE_PREFIX = "m.";
 const APP_CALLBACK_URL = "supoclip://social-callback";
 

@@ -1,4 +1,4 @@
-export type SocialProviderId = "youtube" | "tiktok" | "instagram" | "linkedin" | "twitter";
+export type SocialProviderId = "youtube" | "tiktok" | "instagram" | "linkedin" | "twitter" | "facebook";
 
 export type SocialPrivacyLevel = "public" | "unlisted" | "private";
 
@@ -121,6 +121,7 @@ export const PROVIDER_LABELS: Record<SocialProviderId, string> = {
   instagram: "Instagram Reels",
   linkedin: "LinkedIn",
   twitter: "X (Twitter)",
+  facebook: "Facebook",
 };
 
 export const PRIVACY_LABELS: Record<SocialPrivacyLevel, string> = {

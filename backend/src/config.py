@@ -270,6 +270,8 @@ class Config:
         self.instagram_app_secret = self._get_optional_env(
             "INSTAGRAM_APP_SECRET"
         ) or self._get_optional_env("META_APP_SECRET")
+        self.facebook_app_id = self._get_optional_env("FACEBOOK_APP_ID") or self.instagram_app_id
+        self.facebook_app_secret = self._get_optional_env("FACEBOOK_APP_SECRET") or self.instagram_app_secret
         self.linkedin_client_id = self._get_optional_env("LINKEDIN_CLIENT_ID")
         self.linkedin_client_secret = self._get_optional_env("LINKEDIN_CLIENT_SECRET")
         self.twitter_client_id = self._get_optional_env("TWITTER_CLIENT_ID") or self._get_optional_env("X_CLIENT_ID")
@@ -316,13 +318,13 @@ class Config:
         self.social_publishing_providers = frozenset(
             provider.strip().lower()
             for provider in os.getenv(
-                "SOCIAL_PUBLISHING_PROVIDERS", "youtube,tiktok,instagram,linkedin,twitter"
+                "SOCIAL_PUBLISHING_PROVIDERS", "youtube,tiktok,instagram,linkedin,twitter,facebook"
             ).split(",")
             if provider.strip()
         )
-        if self.social_publishing_providers - {"youtube", "tiktok", "instagram", "linkedin", "twitter"}:
+        if self.social_publishing_providers - {"youtube", "tiktok", "instagram", "linkedin", "twitter", "facebook"}:
             raise ValueError(
-                "SOCIAL_PUBLISHING_PROVIDERS may only include youtube, tiktok, instagram, linkedin, twitter"
+                "SOCIAL_PUBLISHING_PROVIDERS may only include youtube, tiktok, instagram, linkedin, twitter, facebook"
             )
         self.social_publishing_allowed_emails = frozenset(
             email.strip().lower()

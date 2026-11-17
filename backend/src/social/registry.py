@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from ..config import Config, get_config
 from .base import SUPPORTED_PROVIDERS, SocialProvider
+from .facebook import FacebookProvider
 from .instagram import InstagramProvider
 from .linkedin import LinkedInProvider
 from .tiktok import TikTokProvider
@@ -20,6 +21,7 @@ _PROVIDER_CLASSES: Dict[str, Type[SocialProvider]] = {
     "instagram": InstagramProvider,
     "linkedin": LinkedInProvider,
     "twitter": TwitterProvider,
+    "facebook": FacebookProvider,
 }
 
 PROVIDER_SETUP_HINTS = {
@@ -28,6 +30,7 @@ PROVIDER_SETUP_HINTS = {
     "instagram": "Set INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET from a Meta app with Instagram Login.",
     "linkedin": "Set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET from the LinkedIn Developer Portal.",
     "twitter": "Set TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET from the X Developer Portal.",
+    "facebook": "Set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET from Meta for Developers (or reuses INSTAGRAM_APP_ID/SECRET).",
 }
 
 
