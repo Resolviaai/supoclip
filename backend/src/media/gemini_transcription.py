@@ -22,7 +22,7 @@ import requests
 
 from .common import TRANSCRIPT_CACHE_SCHEMA_VERSION, logger
 from .transcription import _prepare_audio_for_transcription
-from .transliteration import has_devanagari, phonetic_devanagari_to_roman
+from .transliteration import has_devanagari, phonetic_devanagari_to_roman, clean_hinglish_spelling
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta/files"
@@ -232,18 +232,22 @@ def _generate_with_gemini_transcribe(
 
 
 def _generate_with_gemini_flash_fallback(
-    file_uri: str, api_key: str, model_name: str = "gemini-3.5-flash-lite", language: Optional[str] = None
+    file_uri: str, api_key: str, model_name: str = "gemini-3.1-flash-lite", language: Optional[str] = None
 ) -> Dict[str, Any]:
     """Fallback: Structured timestamped transcription using Gemini Flash."""
     endpoint = f"{GEMINI_API_BASE}/v1beta/models/{model_name}:generateContent?key={api_key}"
 
     lang_hint = f" The audio language is {language}." if language and language != "auto" else ""
     prompt = (
-        f"You are an expert audio transcription engine.{lang_hint} "
-        "Transcribe the spoken audio verbatim in the original spoken language. "
-        "If speakers switch between English and Hindi (Hinglish), transcribe naturally using Latin / English script. "
+        f"You are an expert audio transcription engine for social media video clipping.{lang_hint} "
+        "Transcribe the spoken audio in natural, readable conversational Roman Hinglish (using Latin / English script). "
+        "Do NOT use Devanagari script. "
+        "CRITICAL SPELLING RULES: "
+        "1. All English words spoken (e.g., video, confession, student, consistency, challenge, break, college, drop out, AI, projects, rule, exam, etc.) "
+        "MUST be spelled with standard, correct English spelling. Never spell 'video' as 'veediyo' or 'college' as 'kolej'. "
+        "2. Hindi words must be written in standard conversational Roman script (e.g., 'main', 'nahi', 'karenge', 'socha', 'kya', 'hai', 'bana raha hoon'). "
         "Provide exact timestamps and speaker labels in JSON array format: "
-        '[{"start": 0.0, "end": 2.5, "speaker": "Speaker 1", "text": "sentence or phrase here"}] '
+        '[{"start": 0.0, "end": 2.5, "speaker": "Speaker 1", "text": "clean Roman Hinglish sentence here"}] '
         "Return ONLY the valid JSON array."
     )
 
@@ -413,20 +417,17 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
     full_text = " ".join(text_pieces).strip() or " ".join(w["text"] for w in words).strip()
 
-    # Transliterate any Devanagari Hindi text to Roman Hinglish (English alphabet)
-    if any(has_devanagari(w.get("text", "")) for w in words) or has_devanagari(full_text):
-        logger.info("Transliterating Devanagari transcript into Roman Hinglish")
-        for w in words:
-            if has_devanagari(w.get("text", "")):
-                w["text"] = phonetic_devanagari_to_roman(w["text"])
-        for u in utterances:
-            if has_devanagari(u.get("text", "")):
-                u["text"] = phonetic_devanagari_to_roman(u["text"])
-            for uw in u.get("words", []):
-                if has_devanagari(uw.get("text", "")):
-                    uw["text"] = phonetic_devanagari_to_roman(uw["text"])
-        if has_devanagari(full_text):
-            full_text = phonetic_devanagari_to_roman(full_text)
+    # Clean and normalize all transcript text to readable Roman Hinglish (zero Devanagari, standard English spelling)
+    for w in words:
+        raw_text = str(w.get("text", "") or w.get("word", ""))
+        w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
+    for u in utterances:
+        raw_u = str(u.get("text", ""))
+        u["text"] = phonetic_devanagari_to_roman(raw_u) if has_devanagari(raw_u) else clean_hinglish_spelling(raw_u)
+        for uw in u.get("words", []):
+            raw_uw = str(uw.get("text", "") or uw.get("word", ""))
+            uw["text"] = phonetic_devanagari_to_roman(raw_uw) if has_devanagari(raw_uw) else clean_hinglish_spelling(raw_uw)
+    full_text = phonetic_devanagari_to_roman(full_text) if has_devanagari(full_text) else clean_hinglish_spelling(full_text)
 
     return {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
@@ -541,18 +542,17 @@ def _parse_gemini_fallback_response(data: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     fallback_full_text = " ".join(full_text_pieces)
-    if any(has_devanagari(w.get("text", "")) for w in words) or has_devanagari(fallback_full_text):
-        for w in words:
-            if has_devanagari(w.get("text", "")):
-                w["text"] = phonetic_devanagari_to_roman(w["text"])
-        for u in utterances:
-            if has_devanagari(u.get("text", "")):
-                u["text"] = phonetic_devanagari_to_roman(u["text"])
-            for uw in u.get("words", []):
-                if has_devanagari(uw.get("text", "")):
-                    uw["text"] = phonetic_devanagari_to_roman(uw["text"])
-        if has_devanagari(fallback_full_text):
-            fallback_full_text = phonetic_devanagari_to_roman(fallback_full_text)
+    # Clean and normalize all fallback transcript text to readable Roman Hinglish (zero Devanagari, standard English spelling)
+    for w in words:
+        raw_text = str(w.get("text", "") or w.get("word", ""))
+        w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
+    for u in utterances:
+        raw_u = str(u.get("text", ""))
+        u["text"] = phonetic_devanagari_to_roman(raw_u) if has_devanagari(raw_u) else clean_hinglish_spelling(raw_u)
+        for uw in u.get("words", []):
+            raw_uw = str(uw.get("text", "") or uw.get("word", ""))
+            uw["text"] = phonetic_devanagari_to_roman(raw_uw) if has_devanagari(raw_uw) else clean_hinglish_spelling(raw_uw)
+    fallback_full_text = phonetic_devanagari_to_roman(fallback_full_text) if has_devanagari(fallback_full_text) else clean_hinglish_spelling(fallback_full_text)
 
     return {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
@@ -569,7 +569,7 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
     1. Extracts 16kHz mono audio from video_path.
     2. Uploads to Gemini Files API.
     3. Calls gemini-3.5-transcribe with verbatim word timestamps and diarization.
-    4. Falls back to gemini-3.5-flash or gemini-3.1-flash if transcribe hits rate limits or errors.
+    4. Falls back to gemini-3.1-flash-lite or gemini-flash-lite-latest if transcribe hits rate limits or errors.
     5. Saves {video_path}.transcript_cache.json in exact SupoClip cache schema.
     6. Returns formatted text lines for AI analysis.
     """
@@ -600,13 +600,13 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
         except Exception as primary_err:
             logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
 
-        # 2. Fallback: gemini-2.5-flash-lite -> gemini-3.1-flash-lite -> gemini-3.5-flash-lite -> gemini-2.5-pro
+        # 2. Fallback: gemini-3.1-flash-lite -> gemini-flash-lite-latest -> gemini-3.5-flash-lite -> gemini-3.8-flash
         if not transcript_data:
             fallback_models = [
-                "gemini-2.5-flash-lite",
                 "gemini-3.1-flash-lite",
+                "gemini-flash-lite-latest",
                 "gemini-3.5-flash-lite",
-                "gemini-2.5-pro",
+                "gemini-3.8-flash",
             ]
             last_fallback_err = None
             for f_model in fallback_models:

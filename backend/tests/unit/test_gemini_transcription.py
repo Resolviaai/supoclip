@@ -148,7 +148,7 @@ def test_devanagari_transliteration():
     assert has_devanagari(sample_hindi)
     roman = phonetic_devanagari_to_roman(sample_hindi)
     assert not has_devanagari(roman)
-    assert "kaise" in roman and "shuroo" in roman
+    assert "kaise" in roman and "shuru" in roman and "video" in roman
 
 
 if __name__ == "__main__":
