@@ -361,7 +361,8 @@ export default function ListPage() {
         <div>
           <h1 className="font-display text-3xl font-bold tracking-tight">{t("title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("summary", { count: tasks.length })}
+            <span className="sm:hidden">{t("summary", { count: tasks.length }).split(" · ")[0]}</span>
+            <span className="hidden sm:inline">{t("summary", { count: tasks.length })}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -373,9 +374,9 @@ export default function ListPage() {
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t("searchPlaceholder")}
               aria-label={t("searchLabel")}
-              className="h-9 rounded-lg bg-background pl-9 pr-8"
+              className="h-9 rounded-lg bg-background pl-9 pr-3 sm:pr-8"
             />
-            <Kbd className="absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>
+            <Kbd className="hidden sm:inline-flex absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>
           </div>
           <Button asChild size="sm" className="h-9 rounded-lg">
             <Link href="/"><Plus className="size-4" /><span className="hidden sm:inline">{t("new")}</span></Link>

@@ -310,6 +310,7 @@ COGNITIVE NEUROSCIENCE & RETENTION VIRALITY (DISPATCH ENGINE):
 MICRO-SURGICAL BOUNDARY PHYSICS:
 1. PREAMBLE STRIPPING:
    - If a speaker spends 5-15 seconds warming up ("So basically let me explain...", "Wait, let me fix this...") before dropping the core hook, snap start_time strictly to where the core hook/premise ignites.
+   - Bad picks include intros, bare agreement, mic checks, or housekeeping chatter. The clip's real first sentence is the hook.
 2. FALSE STARTS & STUTTERS:
    - Snap start_time strictly to the clean take ("the real secret is...").
 3. ZERO ORPHAN PRONOUNS & DANGLING ENDS:
@@ -320,7 +321,7 @@ MICRO-SURGICAL BOUNDARY PHYSICS:
    - A scrolling viewer on TikTok/Reels/Shorts must understand and care without seeing any previous context.
 
 TEXT HOOK ENGINE (ON-SCREEN TITLE TEXT — hook_title):
-- STRICT LATIN SCRIPT INVARIANT: If the creator speaks Hindi or Hinglish, write hook_title, summary, and explanations using ONLY natural Roman Hinglish (standard English/Latin alphabet, e.g. "10 Minute Mein 14 Lakh Ka Loss", "Why 90% Students Quit In 22 Days"). NEVER use Devanagari script for hook titles. If English, use crisp English.
+- LANGUAGE RULE (80%+ CRISP ENGLISH, ZERO DEVANAGARI): Write hook_title primarily in crisp, punchy English (~80% of clips, or whenever English reads sharpest) EVEN on Hindi or Hinglish videos (e.g. "Why EMI Makes You a Modern Slave", "24% Credit Card Interest Trap", "How I Lost 14 Lakh In 10 Minutes"). Only use natural Roman Hinglish (~20% of clips) when an iconic Hindi phrase genuinely hits harder than English (e.g. "EMI Se Future Barbaad Mat Karo"). STRICT LATIN SCRIPT INVARIANT: NEVER use Devanagari script anywhere in hook_title, summary, or explanations.
 - FORMULA (SUBJECT + 1 CORE COMPONENT): Every hook_title MUST pair a clear subject with ONE of these three retention drivers:
   1. Pain Point Reminder (call out the exact mistake, loss, or frustration)
   2. Dream Outcome Teaser (tease the exact result or payoff)
@@ -819,7 +820,7 @@ Selection target:
 - Every clip must contain a full setup and payoff within {bounds.minimum}-{bounds.maximum} seconds.
 - If a strong moment is shorter than {bounds.ideal_minimum} seconds, first try expanding to nearby contiguous transcript lines that add useful context.
 - STRICT PROHIBITION: NEVER choose intro greetings, mic checks, throat-clearing, or housekeeping chatter. Cut straight to where the premise or story ignites.
-- If the content is in Hindi or Hinglish, write hook_title and explanations in natural Roman Hinglish (Latin alphabet), never Devanagari.
+- For Hindi or Hinglish content, write hook_title primarily in crisp English (~80% of clips, whenever English reads sharpest), using natural Roman Hinglish (~20%) only when a Hindi phrase genuinely hits harder; NEVER use Devanagari script.
 - Before returning a segment, ask whether a viewer would understand and care without seeing the rest of the source video.
 
 Critical accuracy requirements:
@@ -838,7 +839,7 @@ JSON-only output requirements:
 - Top-level keys: "most_relevant_segments", "summary", "key_topics".
 - Segment keys: "start_time", "end_time", "text", "relevance_score", "reasoning", "virality", "hook_title".
 - Optional segment keys "hook_start_time"/"hook_end_time": null unless a later 2-5 second line stands alone and the real opening is already a complete setup. The clip is not replayed from that line by default.
-- "hook_title" is a punchy 3-8 word on-screen text hook (Subject + Pain Point / Dream Outcome / State Change), using exact numbers from the transcript and power words, zero filler connectors ("and", "but", "therefore"), no commas/semicolons/periods (only optional "..." or (...) emphasis or "?" for questions), in the transcript's language (Roman Hinglish if Hindi/Hinglish), no hashtags or emojis.
+- "hook_title" is a punchy 3-8 word on-screen text hook (Subject + Pain Point / Dream Outcome / State Change), using exact numbers from the transcript and power words, zero filler connectors ("and", "but", "therefore"), no commas/semicolons/periods (only optional "..." or (...) emphasis or "?" for questions), written primarily in crisp English (~80% of clips, even for Hindi/Hinglish videos, using natural Roman Hinglish ~20% only when a Hindi phrase hits harder; never Devanagari), no hashtags or emojis.
 - Virality keys: "hook_score", "engagement_score", "value_score", "shareability_score", "total_score", "hook_type", "virality_reasoning".
 - Do not return segments shorter than {bounds.minimum} seconds or longer than {bounds.maximum} seconds.
 
@@ -1109,6 +1110,18 @@ def _is_transient_model_error(error: Exception) -> bool:
     return False
 
 
+_GEMINI_FALLBACK_CHAIN = (
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+)
+FALLBACK_MODEL_CALL_TIMEOUT_SECONDS = 90.0
+FALLBACK_SWEEP_ROUNDS = 2
+
+
 def _get_gemini_fallback_model(model_name: str) -> Optional[str]:
     """Return fallback model name when using Google models (e.g. 3.5-flash-lite -> 3.1-flash-lite)."""
     provider, name = _split_llm_name(model_name or "")
@@ -1119,6 +1132,92 @@ def _get_gemini_fallback_model(model_name: str) -> Optional[str]:
             return f"{provider}:gemini-2.5-flash-lite"
         elif name in {"gemini-3.5-flash", "gemini-3-flash-preview"}:
             return f"{provider}:gemini-3.1-flash-lite"
+    return None
+
+
+def _get_gemini_fallback_models(model_name: str) -> list[str]:
+    """Return an ordered chain of healthy Gemini fallback models for transient failover."""
+    provider, name = _split_llm_name(model_name or "")
+    if provider not in {"google", "google-gla"}:
+        return []
+    # Use the canonical 'google:' prefix to avoid deprecation noise on newer pydantic-ai.
+    normalized_provider = "google" if provider == "google-gla" else provider
+    return [
+        f"{normalized_provider}:{candidate}"
+        for candidate in _GEMINI_FALLBACK_CHAIN
+        if candidate != name
+    ]
+
+
+def _extract_agent_model_name(agent: Any) -> Optional[str]:
+    """Identify the model configured on a pydantic-ai Agent, if present."""
+    model = getattr(agent, "model", None)
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return model
+    system = getattr(model, "system", None)
+    model_name = getattr(model, "model_name", None)
+    if system and model_name:
+        return f"{system}:{model_name}"
+    return None
+
+
+async def _run_fallback_models(
+    agent: Agent,
+    prompt: str,
+    fallback_models: list[str],
+    per_call_timeout: float,
+    *,
+    rounds: int = FALLBACK_SWEEP_ROUNDS,
+) -> Any:
+    """Sweep through Gemini fallback models on transient 503/429/timeout spikes.
+
+    Each individual attempt is capped by ``per_call_timeout`` so one stalled
+    endpoint cannot consume the overall analysis budget, and provider bodies
+    are never logged.
+    """
+    last_error: Optional[Exception] = None
+    for round_index in range(1, max(1, rounds) + 1):
+        for fb_model in fallback_models:
+            logger.warning(
+                "Trying fallback model %s (round %s/%s)",
+                fb_model,
+                round_index,
+                rounds,
+            )
+            try:
+                async with asyncio.timeout(per_call_timeout):
+                    result = await agent.run(prompt, model=fb_model)
+                logger.info("AI analysis completed using fallback model %s", fb_model)
+                return result
+            except asyncio.CancelledError:
+                raise
+            except Exception as fb_err:
+                last_error = fb_err
+                # Do not log provider bodies: they may contain transcript data.
+                logger.warning(
+                    "Fallback model %s failed (%s, HTTP status %s)",
+                    fb_model,
+                    type(fb_err).__name__,
+                    getattr(fb_err, "status_code", None),
+                )
+                if (
+                    not _is_transient_model_error(fb_err)
+                    and not (isinstance(fb_err, ModelHTTPError) and fb_err.status_code == 404)
+                ):
+                    raise
+        if round_index < rounds:
+            delay = 5 * round_index + random.uniform(0, 1)
+            logger.warning(
+                "All fallback models busy on round %s/%s; waiting %.1fs before retry",
+                round_index,
+                rounds,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    if last_error is not None:
+        raise last_error
     return None
 
 
@@ -1135,6 +1234,13 @@ async def _run_transcript_analysis(
     """
     if timeout_seconds is None:
         timeout_seconds = TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS
+    agent_model_name = _extract_agent_model_name(agent)
+    fallback_models = (
+        _get_gemini_fallback_models(agent_model_name)
+        if agent_model_name
+        else []
+    )
+    per_fallback_timeout = min(FALLBACK_MODEL_CALL_TIMEOUT_SECONDS, max(1.0, float(timeout_seconds)))
     try:
         async with asyncio.timeout(timeout_seconds):
             for attempt in range(1, TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS + 1):
@@ -1144,34 +1250,42 @@ async def _run_transcript_analysis(
                         logger.info("AI analysis completed using model %s", result.response.model_name)
                     return result
                 except Exception as error:
-                    fb_model = _get_gemini_fallback_model(get_config().llm)
+                    is_not_found = isinstance(error, ModelHTTPError) and error.status_code == 404
                     if not _is_transient_model_error(error):
-                        if fb_model:
+                        if is_not_found and fallback_models:
                             logger.warning(
-                                "AI analysis encountered error (%s) on primary model %s. Retrying with fallback %s",
-                                error,
-                                get_config().llm,
-                                fb_model,
+                                "Primary model %s returned 404; trying fallback models",
+                                agent_model_name,
                             )
-                            try:
-                                result = await agent.run(prompt, model=fb_model)
-                                logger.info("AI analysis completed using fallback model %s", fb_model)
-                                return result
-                            except Exception as fb_err:
-                                logger.error("Fallback model %s failed: %s", fb_model, fb_err)
+                            return await _run_fallback_models(
+                                agent,
+                                prompt,
+                                fallback_models,
+                                per_fallback_timeout,
+                                rounds=1,
+                            )
                         raise
                     if attempt == TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS:
-                        if fb_model:
+                        if fallback_models:
                             logger.warning(
-                                "Primary model exhausted attempts. Trying fallback model: %s",
-                                fb_model,
+                                "Primary model %s exhausted %s attempts (%s, HTTP status %s); sweeping %s fallback models",
+                                agent_model_name,
+                                attempt,
+                                type(error).__name__,
+                                getattr(error, "status_code", None),
+                                len(fallback_models),
                             )
                             try:
-                                result = await agent.run(prompt, model=fb_model)
-                                logger.info("AI analysis completed using fallback model %s", fb_model)
-                                return result
+                                return await _run_fallback_models(
+                                    agent,
+                                    prompt,
+                                    fallback_models,
+                                    per_fallback_timeout,
+                                )
+                            except asyncio.CancelledError:
+                                raise
                             except Exception as fb_err:
-                                logger.error("Fallback model %s failed: %s", fb_model, fb_err)
+                                error = fb_err
                         logger.error(
                             "AI analysis unavailable after %s attempts (%s, HTTP status %s)",
                             attempt,

@@ -978,7 +978,7 @@ export default function HomeApp() {
                       onBlur={(e) => { rescueSource(e.target.value); }}
                       onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void handleSubmit(); }}
                       disabled={controlsDisabled}
-                      className="h-11 w-full bg-transparent text-base outline-none placeholder:text-muted-foreground/80 disabled:cursor-not-allowed"
+                      className="h-11 w-full bg-transparent text-base outline-none placeholder:text-sm sm:placeholder:text-base placeholder:text-muted-foreground/80 disabled:cursor-not-allowed"
                     />
                   </div>
                 </>

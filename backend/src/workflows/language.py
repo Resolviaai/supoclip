@@ -39,7 +39,7 @@ LANGUAGE_NAMES = {
 PART_LABEL = {
     "en": "Part {n}", "de": "Teil {n}", "es": "Parte {n}", "pt": "Parte {n}", "it": "Parte {n}",
     "fr": "Partie {n}", "nl": "Deel {n}", "id": "Bagian {n}", "tr": "Bölüm {n}", "pl": "Część {n}",
-    "ru": "Часть {n}", "hi": "भाग {n}", "ja": "パート{n}", "zh": "第{n}部分", "ko": "{n}부", "ar": "الجزء {n}",
+    "ru": "Часть {n}", "hi": "Part {n}", "ja": "パート{n}", "zh": "第{n}部分", "ko": "{n}부", "ar": "الجزء {n}",
     "uk": "Частина {n}", "sv": "Del {n}", "da": "Del {n}", "no": "Del {n}", "fi": "Osa {n}",
     "cs": "Část {n}", "ro": "Partea {n}", "hu": "{n}. rész", "el": "Μέρος {n}", "he": "חלק {n}",
     "vi": "Phần {n}", "th": "ตอนที่ {n}", "ms": "Bahagian {n}", "yue": "第{n}部分",

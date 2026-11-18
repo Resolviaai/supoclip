@@ -350,6 +350,17 @@ class TaskRepository:
         await commit_unless_editing(db)
 
     @staticmethod
+    async def clear_task_error_metadata(db: AsyncSession, task_id: str) -> None:
+        """Clear stale failure metadata when a task is explicitly retried."""
+        await db.execute(
+            text(
+                "UPDATE tasks SET error_code = NULL, completed_at = NULL, updated_at = NOW() WHERE id = :task_id"
+            ),
+            {"task_id": task_id},
+        )
+        await commit_unless_editing(db)
+
+    @staticmethod
     async def get_performance_metrics(db: AsyncSession) -> Dict[str, Any]:
         result = await db.execute(
             text(

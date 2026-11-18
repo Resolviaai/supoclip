@@ -60,10 +60,11 @@ export default async (request: Request, context: Context) => {
       redirect: "manual",
     });
 
-    // If ngrok itself returns an offline tunnel error (502/503/504 with ngrok error header), show our clean offline page.
+    // If the upstream tunnel itself is offline or rate-limited (502/503/504/403 with ngrok error, or Cloudflare 530), show our clean offline page.
     if (
-      (upstreamResponse.status === 502 || upstreamResponse.status === 503 || upstreamResponse.status === 504) &&
-      upstreamResponse.headers.has("ngrok-error-code") &&
+      (((upstreamResponse.status === 502 || upstreamResponse.status === 503 || upstreamResponse.status === 504 || upstreamResponse.status === 403) &&
+        upstreamResponse.headers.has("ngrok-error-code")) ||
+        upstreamResponse.status === 530) &&
       (request.headers.get("accept") || "").includes("text/html")
     ) {
       const offlineRes = await context.next(new Request(new URL("/offline.html", incomingUrl)));

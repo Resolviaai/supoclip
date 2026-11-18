@@ -4,6 +4,13 @@ What changed in SupoClip for people using the product. Newest dates are first.
 
 Add a line here when a pull request changes something a user can see. Use **New**, **Improved**, **Fixed**, or **Under the hood**, describe the change in plain language, and link the pull request. Skip internal-only work, or fold it into one **Under the hood** line. Do not include customer names, email addresses, user IDs, or anything else private.
 
+## 2026-11-19
+
+- **Fixed:** Transcript analysis and clipping now automatically fail over across alternative Gemini models when an upstream provider experiences transient errors, preventing generations from failing. ([#450](https://github.com/FujiwaraChoki/supoclip/pull/450))
+- **Improved:** On-screen clip hooks and titles default to crisp English with clean Roman script for international social distribution, and series clips consistently use English part numbering. ([#451](https://github.com/FujiwaraChoki/supoclip/pull/451))
+- **Fixed:** The clip editor timeline no longer shows broken thumbnail requests while preparing canvas assets or when switching between clips. ([#452](https://github.com/FujiwaraChoki/supoclip/pull/452))
+- **Improved:** The web application now supports full PWA installation and native mobile ergonomics with safe-area padding and gesture navigation on mobile devices. ([#453](https://github.com/FujiwaraChoki/supoclip/pull/453))
+
 ## 2026-11-18
 
 - **New:** After you subscribe or change plans, your plan card on Settings turns into a thank-you note with a colourful wave, and back into your upgraded plan when you click Done. ([#440](https://github.com/FujiwaraChoki/supoclip/pull/440))

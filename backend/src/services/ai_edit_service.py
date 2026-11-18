@@ -558,9 +558,92 @@ class AIEditError(Exception):
     """A failure the creator should see as-is."""
 
 
+GEMINI_AI_EDIT_MODELS = (
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
+)
+
+
+def _gemini_api_key(config: Any) -> Optional[str]:
+    return getattr(config, "gemini_api_key", None) or getattr(config, "google_api_key", None)
+
+
 def ai_editing_configured() -> bool:
     model = os.getenv("AI_EDIT_MODEL", AI_EDIT_MODEL).strip() or AI_EDIT_MODEL
-    return bool(model.removeprefix("ollama:")) if model.startswith("ollama:") else bool(get_config().anthropic_api_key)
+    if model.startswith("ollama:"):
+        return bool(model.removeprefix("ollama:"))
+    config = get_config()
+    return bool(getattr(config, "anthropic_api_key", None) or _gemini_api_key(config))
+
+
+async def _plan_edit_gemini(context: str, api_key: str, preferred_model: Optional[str] = None) -> EditPlan:
+    """Plan structured editor operations via Gemini with automatic fallback across healthy models."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    gemini_system = (
+        SYSTEM_PROMPT
+        + '\n\nReturn ONLY a valid JSON object matching this exact schema (no Markdown fences, no prose). '
+        + 'Every "set" operation "value" must be a JSON string (e.g. "true", "0.5", "#FFFF00").\n'
+        + "JSON schema:\n"
+        + json.dumps(EditPlan.model_json_schema(), separators=(",", ":"))
+    )
+    models: list[str] = []
+    if preferred_model:
+        cleaned = preferred_model.removeprefix("google-gla:").removeprefix("google:")
+        if cleaned:
+            models.append(cleaned)
+    for candidate in GEMINI_AI_EDIT_MODELS:
+        if candidate not in models:
+            models.append(candidate)
+
+    last_error: Optional[Exception] = None
+    for model_name in models:
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=context,
+                    config=types.GenerateContentConfig(
+                        system_instruction=gemini_system,
+                        response_mime_type="application/json",
+                        temperature=0.0,
+                        max_output_tokens=4096,
+                    ),
+                ),
+                timeout=min(45, AI_EDIT_TIMEOUT_SECONDS),
+            )
+            raw_text = (response.text or "").strip()
+            if raw_text.startswith("```"):
+                raw_text = raw_text.split("\n", 1)[-1]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3].strip()
+            parsed = json.loads(raw_text)
+            if isinstance(parsed, dict) and isinstance(parsed.get("operations"), list):
+                for op in parsed["operations"]:
+                    if isinstance(op, dict) and op.get("type") == "set" and "value" in op:
+                        val = op["value"]
+                        if isinstance(val, bool):
+                            op["value"] = "true" if val else "false"
+                        elif isinstance(val, (int, float)):
+                            op["value"] = str(val)
+            plan = EditPlan.model_validate(parsed)
+            logger.info("Gemini AI edit (%s) planned %d operations", model_name, len(plan.operations))
+            return plan
+        except (ValueError, ValidationError) as exc:
+            last_error = exc
+            logger.warning("Gemini AI edit (%s) returned invalid plan (%s)", model_name, type(exc).__name__)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Gemini AI edit (%s) failed (%s)", model_name, type(exc).__name__)
+
+    if isinstance(last_error, (ValueError, ValidationError)):
+        raise AIEditError("The AI's answer was invalid. Try a smaller change.") from None
+    raise AIEditError("AI editing is busy right now. Try again in a moment.") from None
 
 
 async def _plan_edit_ollama(context: str, model: str) -> EditPlan:
@@ -613,13 +696,21 @@ async def plan_edit(context: str) -> EditPlan:
         if not model.removeprefix("ollama:"):
             raise AIEditError("Set an Ollama model in AI_EDIT_MODEL.")
         return await _plan_edit_ollama(context, model.removeprefix("ollama:"))
+    config = get_config()
+    gemini_key = _gemini_api_key(config)
+    anthropic_key = getattr(config, "anthropic_api_key", None)
+    if model.startswith(("google:", "google-gla:", "gemini-")):
+        if not gemini_key:
+            raise AIEditError("AI editing isn't set up on this server.")
+        return await _plan_edit_gemini(context, gemini_key, preferred_model=model)
+    if not anthropic_key:
+        if gemini_key:
+            return await _plan_edit_gemini(context, gemini_key)
+        raise AIEditError("AI editing isn't set up on this server.")
     import anthropic
 
-    config = get_config()
-    if not config.anthropic_api_key:
-        raise AIEditError("AI editing isn't set up on this server.")
     client = anthropic.AsyncAnthropic(
-        api_key=config.anthropic_api_key, timeout=AI_EDIT_TIMEOUT_SECONDS, max_retries=2
+        api_key=anthropic_key, timeout=AI_EDIT_TIMEOUT_SECONDS, max_retries=2
     )
     try:
         response = await client.beta.messages.parse(

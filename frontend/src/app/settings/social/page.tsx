@@ -284,18 +284,18 @@ function SocialSettingsContent() {
             {connections.map((connection) => (
               <div
                 key={connection.id}
-                className="flex items-center justify-between gap-4 rounded-xl border bg-background p-4"
+                className="flex flex-col gap-3 rounded-xl border bg-background p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <Avatar className="h-9 w-9">
+                  <Avatar className="h-9 w-9 shrink-0">
                     {connection.avatar_url && <AvatarImage src={connection.avatar_url} alt="" />}
                     <AvatarFallback>
                       {(connection.display_name || connection.username || "?").slice(0, 1).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium truncate">{connectionLabel(connection)}</span>
+                      <span className="font-medium break-words">{connectionLabel(connection)}</span>
                       <Badge variant="outline" className="gap-1.5">
                         <SocialProviderIcon provider={connection.provider} className="size-3" />
                         {PROVIDER_LABELS[connection.provider]}
@@ -321,7 +321,7 @@ function SocialSettingsContent() {
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex items-center justify-end gap-1 flex-shrink-0 border-t pt-2.5 sm:border-t-0 sm:pt-0">
                   {connection.status === "reauth_required" && (
                     <a href={`/api/social/connect/${connection.provider}`}>
                       <Button size="sm" variant="outline">

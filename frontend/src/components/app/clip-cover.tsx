@@ -1,18 +1,51 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Film } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** Silent video poster that previews on hover — used for generation and clip thumbnails. */
-export function ClipCover({ src, className, children }: {
+export function ClipCover({ src, className, hidePlaceholder = false, children }: {
   src: string | null;
   className?: string;
+  hidePlaceholder?: boolean;
   children?: React.ReactNode;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [failed, setFailed] = useState(false);
   const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    setReady(false);
+    if (!src) return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.readyState >= 2) {
+      setReady(true);
+      return;
+    }
+    // If the browser throttled initial metadata/frame paint under concurrent cards, retry once and reveal frame.
+    const timer = window.setTimeout(() => {
+      const current = videoRef.current;
+      if (!current) return;
+      if (current.readyState >= 2) {
+        setReady(true);
+      } else if (current.readyState >= 1) {
+        try {
+          if (current.currentTime < 0.1 && current.duration > 0.6) {
+            current.currentTime = 0.5;
+          }
+        } catch { /* ignore seek errors */ }
+      } else {
+        try {
+          current.load();
+        } catch { /* ignore */ }
+      }
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [src]);
+
   const play = (event: React.PointerEvent) => {
     if (event.pointerType !== "mouse") return;
     void videoRef.current?.play().catch(() => {});
@@ -33,7 +66,7 @@ export function ClipCover({ src, className, children }: {
     >
       {(!src || failed || !ready) && (
         <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_30%_20%,oklch(0.32_0.015_50),oklch(0.16_0.005_50))]">
-          <Film className="size-6 text-white/25" aria-hidden />
+          {!hidePlaceholder && <Film className="size-6 text-white/25" aria-hidden />}
         </div>
       )}
       {src && !failed && (
@@ -43,7 +76,7 @@ export function ClipCover({ src, className, children }: {
           muted
           loop
           playsInline
-          preload="metadata"
+          preload="auto"
           onLoadedMetadata={(e) => {
             const video = e.currentTarget;
             if (video.currentTime < 0.1 && video.duration > 0.6) {
@@ -51,6 +84,7 @@ export function ClipCover({ src, className, children }: {
             }
           }}
           onLoadedData={() => setReady(true)}
+          onCanPlay={() => setReady(true)}
           onSeeked={() => setReady(true)}
           onError={() => setFailed(true)}
           className={cn(

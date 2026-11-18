@@ -35,6 +35,7 @@ export function GenerationCard({ generation, selected, onToggle, selectionDisabl
       <Link href={`/tasks/${generation.id}`} className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] transition-transform duration-150">
         <ClipCover
           src={coverClipUrl(generation)}
+          hidePlaceholder={active || failed}
           className={cn(
             "aspect-[3/4] rounded-xl ring-1 ring-black/5 transition-all duration-200 group-hover:shadow-lg group-hover:ring-black/10",
             selected && "ring-2 ring-foreground",

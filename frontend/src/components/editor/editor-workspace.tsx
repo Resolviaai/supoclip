@@ -138,6 +138,12 @@ export function EditorWorkspace({
     [combining, setCombining] = useState(false);
   const [brollId, setBrollId] = useState<string | null>(null);
   const [clipsOpen, setClipsOpen] = useState(false);
+  const [preparedClipIds, setPreparedClipIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (asset?.status === "ready") {
+      setPreparedClipIds((prev) => (prev.includes(clip.id) ? prev : [...prev, clip.id]));
+    }
+  }, [asset?.status, clip.id]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const index = doc ? Math.min(segmentIndex, doc.segments.length - 1) : 0;
   const seek = useCallback((value: number) => {
@@ -359,15 +365,21 @@ export function EditorWorkspace({
               <Button variant="ghost" size="sm" className="h-8 min-w-0 max-w-full gap-1.5 rounded-full bg-background px-2.5 sm:px-3 shadow-[0_1px_2px_rgb(0_0_0/0.05)] ring-1 ring-black/[0.06] hover:bg-background/80 dark:ring-white/10" aria-label={t("workspace.switchClip")}>
                 <span
                   aria-hidden
-                  className="h-5 w-3 shrink-0 rounded-[2px] bg-muted"
-                  style={{
-                    backgroundImage: `url(${endpoint}/media/thumbnails.jpg)`,
-                    backgroundSize: "auto 100%",
-                  }}
-                />
-                <span className="min-w-0 max-w-[28vw] sm:max-w-44 truncate">{clipPickerLabel(t, clip)}</span>
-                <span className="shrink-0 text-muted-foreground tabular-nums">
-                  {t("workspace.clipOf", { count: clips.length })}
+                  className="flex h-5 w-3 shrink-0 items-center justify-center rounded-[2px] bg-muted"
+                  style={
+                    asset?.status === "ready"
+                      ? {
+                          backgroundImage: `url(${endpoint}/media/thumbnails.jpg)`,
+                          backgroundSize: "auto 100%",
+                        }
+                      : undefined
+                  }
+                >
+                  {asset?.status !== "ready" && <Film className="size-2.5 text-muted-foreground/60" />}
+                </span>
+                <span className="min-w-0 max-w-[26vw] sm:max-w-44 truncate">{clipPickerLabel(t, clip)}</span>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  {Math.max(1, clips.findIndex((c) => c.id === clip.id) + 1)}/{clips.length}
                 </span>
                 <ChevronDown className="shrink-0 opacity-60" />
               </Button>
@@ -390,12 +402,20 @@ export function EditorWorkspace({
                     >
                       <span
                         aria-hidden
-                        className="h-10 w-6 shrink-0 rounded-[3px] bg-muted"
-                        style={{
-                          backgroundImage: `url(/api/tasks/${taskId}/clips/${c.id}/editor/media/thumbnails.jpg)`,
-                          backgroundSize: "auto 100%",
-                        }}
-                      />
+                        className="flex h-10 w-6 shrink-0 items-center justify-center rounded-[3px] bg-muted"
+                        style={
+                          (current && asset?.status === "ready") || preparedClipIds.includes(c.id)
+                            ? {
+                                backgroundImage: `url(/api/tasks/${taskId}/clips/${c.id}/editor/media/thumbnails.jpg)`,
+                                backgroundSize: "auto 100%",
+                              }
+                            : undefined
+                        }
+                      >
+                        {!((current && asset?.status === "ready") || preparedClipIds.includes(c.id)) && (
+                          <Film className="size-3.5 text-muted-foreground/50" />
+                        )}
+                      </span>
                       <button
                         className="min-w-0 flex-1 text-left outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-[3px] focus-visible:after:ring-ring/50"
                         onClick={() => {

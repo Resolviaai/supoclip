@@ -226,38 +226,40 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
         {clip && (
           <>
             {/* Native Mobile Navigation Bar */}
-            <div className="flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-end justify-between border-b border-border/40 bg-background/90 px-3 pb-2 pt-[env(safe-area-inset-top)] backdrop-blur-xl md:hidden">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onClose}
-                className="size-9 rounded-full p-0 text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
-                aria-label={tCommon("close")}
-              >
-                <X className="size-5" />
-              </Button>
-              <span className="text-xs font-semibold tabular-nums text-foreground">
-                {t("position", { current: index + 1, total })}
-              </span>
-              <div className="flex items-center gap-1">
+            <div className="shrink-0 border-b border-border/40 bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur-xl md:hidden">
+              <div className="flex h-14 items-center justify-between px-3">
                 <Button
-                  size="icon-sm"
+                  size="sm"
                   variant="ghost"
-                  onClick={() => onNavigate(-1)}
-                  aria-label={t("previous")}
-                  className="size-9 rounded-full text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                  onClick={onClose}
+                  className="size-9 rounded-full p-0 text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                  aria-label={tCommon("close")}
                 >
-                  <ChevronLeft className="size-5" />
+                  <X className="size-5" />
                 </Button>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={() => onNavigate(1)}
-                  aria-label={t("next")}
-                  className="size-9 rounded-full text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
-                >
-                  <ChevronRight className="size-5" />
-                </Button>
+                <span className="text-xs font-semibold tabular-nums text-foreground">
+                  {t("position", { current: index + 1, total })}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => onNavigate(-1)}
+                    aria-label={t("previous")}
+                    className="size-9 rounded-full text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                  >
+                    <ChevronLeft className="size-5" />
+                  </Button>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => onNavigate(1)}
+                    aria-label={t("next")}
+                    className="size-9 rounded-full text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                  >
+                    <ChevronRight className="size-5" />
+                  </Button>
+                </div>
               </div>
             </div>
 

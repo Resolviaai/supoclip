@@ -126,3 +126,70 @@ async def test_entire_run_has_deadline(monkeypatch):
         await ai._run_transcript_analysis(agent, "prompt")
     assert cancelled.is_set()
     assert agent.run.await_count == 1
+
+
+async def test_gemini_fallback_chain_recovers_after_primary_and_first_fallback_overload(
+    retry_sleep, caplog
+):
+    calls = []
+
+    async def scripted_run(prompt, *, model=None):
+        calls.append(model)
+        if model is None:
+            raise ModelHTTPError(503, "gemini-3.5-flash-lite", {"message": "sensitive transcript"})
+        if model == "google:gemini-3-flash-preview":
+            raise ModelHTTPError(503, "gemini-3-flash-preview", {"message": "sensitive transcript"})
+        return "recovered-from-second-fallback"
+
+    agent = SimpleNamespace(
+        model=SimpleNamespace(system="google-gla", model_name="gemini-3.5-flash-lite"),
+        run=AsyncMock(side_effect=scripted_run),
+    )
+
+    result = await ai._run_transcript_analysis(agent, "prompt")
+
+    assert result == "recovered-from-second-fallback"
+    assert calls == [
+        None,
+        None,
+        None,
+        "google:gemini-3-flash-preview",
+        "google:gemini-3.1-flash-lite",
+    ]
+    assert "sensitive transcript" not in caplog.text
+
+
+async def test_gemini_permanent_error_does_not_try_fallbacks(retry_sleep):
+    error = ModelHTTPError(401, "gemini-3.5-flash-lite")
+    agent = SimpleNamespace(
+        model=SimpleNamespace(system="google", model_name="gemini-3.5-flash-lite"),
+        run=AsyncMock(side_effect=error),
+    )
+
+    with pytest.raises(ModelHTTPError) as caught:
+        await ai._run_transcript_analysis(agent, "prompt")
+
+    assert caught.value is error
+    agent.run.assert_awaited_once_with("prompt")
+    retry_sleep.assert_not_awaited()
+
+
+async def test_gemini_not_found_triggers_fallback_immediately(retry_sleep):
+    calls = []
+
+    async def scripted_run(prompt, *, model=None):
+        calls.append(model)
+        if model is None:
+            raise ModelHTTPError(404, "gemini-2.5-flash-lite")
+        return "fallback-ok"
+
+    agent = SimpleNamespace(
+        model=SimpleNamespace(system="google", model_name="gemini-2.5-flash-lite"),
+        run=AsyncMock(side_effect=scripted_run),
+    )
+
+    result = await ai._run_transcript_analysis(agent, "prompt")
+
+    assert result == "fallback-ok"
+    assert calls == [None, "google:gemini-3.5-flash-lite"]
+    retry_sleep.assert_not_awaited()

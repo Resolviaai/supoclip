@@ -43,25 +43,41 @@ async def generate_social_caption(
 
     caption: str = ""
 
-    # If Gemini is configured and no Anthropic key is available, use Gemini
+    # If Gemini is configured and no Anthropic key is available, use Gemini with fallback chain
     if gemini_key and not anthropic_key:
-        try:
-            from google import genai
-            client = genai.Client(api_key=gemini_key)
-            full_prompt = (
-                f"{CAPTION_PROMPT}\n\n"
-                f"Clip JSON:\n{prompt}\n\n"
-                "Write only the final caption. Use English letters only. Roman Hinglish if Hindi. No Devanagari."
-            )
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model="gemini-3.5-flash-lite",
-                contents=full_prompt,
-            )
-            caption = (response.text or "").strip()
-        except Exception as exc:
-            logger.warning("Gemini social caption generation failed (%s)", exc)
-            raise
+        from google import genai
+        client = genai.Client(api_key=gemini_key)
+        full_prompt = (
+            f"{CAPTION_PROMPT}\n\n"
+            f"Clip JSON:\n{prompt}\n\n"
+            "Write only the final caption. Use English letters only. Roman Hinglish if Hindi. No Devanagari."
+        )
+        gemini_models = (
+            "gemini-3.5-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-flash-lite-latest",
+        )
+        last_exc: Optional[Exception] = None
+        for model_name in gemini_models:
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=full_prompt,
+                    ),
+                    timeout=35,
+                )
+                candidate = (response.text or "").strip()
+                if candidate:
+                    caption = candidate
+                    break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("Gemini social caption model %s failed (%s)", model_name, type(exc).__name__)
+        if not caption and last_exc is not None:
+            raise last_exc
 
     # Otherwise fallback to Anthropic
     if not caption and anthropic_key:

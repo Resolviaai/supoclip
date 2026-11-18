@@ -151,6 +151,121 @@ def test_devanagari_transliteration():
     assert "kaise" in roman and "shuru" in roman and "video" in roman
 
 
+def test_parse_gemini_transcribe_rechunks_multi_speaker_giant_utterance():
+    """Multi-speaker diarization with 1 long monologue utterance must still be split into granular utterances."""
+    long_words = [
+        {"word": f"word{i}" + ("." if i % 10 == 9 else ""), "startOffset": f"{10 + i * 0.5:.2f}s", "endOffset": f"{10 + i * 0.5 + 0.3:.2f}s"}
+        for i in range(45)
+    ]
+    sample_response = {
+        "candidates": [
+            {
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [
+                        {
+                            "audioTranscription": {
+                                "speakerLabel": "spk:0",
+                                "words": [
+                                    {"word": "Intro", "startOffset": "1.0s", "endOffset": "1.5s"},
+                                    {"word": "hook.", "startOffset": "1.6s", "endOffset": "2.0s"},
+                                ],
+                            }
+                        },
+                        {
+                            "audioTranscription": {
+                                "speakerLabel": "spk:1",
+                                "words": [
+                                    {"word": "Stick", "startOffset": "3.0s", "endOffset": "3.4s"},
+                                    {"word": "to", "startOffset": "3.5s", "endOffset": "3.7s"},
+                                    {"word": "script.", "startOffset": "3.8s", "endOffset": "4.2s"},
+                                ],
+                            }
+                        },
+                        {
+                            "audioTranscription": {
+                                "speakerLabel": "spk:0",
+                                "words": long_words,
+                            }
+                        },
+                    ]
+                },
+            }
+        ]
+    }
+
+    parsed = _parse_gemini_transcribe_response(sample_response)
+    assert len(parsed["words"]) == 50
+    # 2 short intro utterances + at least 4 chunked utterances from the 45-word monologue
+    assert len(parsed["utterances"]) >= 6
+    assert all(len(u["words"]) <= 15 for u in parsed["utterances"])
+
+
+def test_get_transcript_with_gemini_skips_truncated_fallback_for_full_transcript(tmp_path, monkeypatch):
+    from src.media import gemini_transcription as gt
+
+    video_path = tmp_path / "sample.mp4"
+    audio_path = tmp_path / "sample.transcription.mp3"
+    video_path.write_bytes(b"video")
+    audio_path.write_bytes(b"audio")
+
+    monkeypatch.setattr(gt, "_prepare_audio_for_transcription", lambda p: audio_path)
+    monkeypatch.setattr(gt, "ffprobe_duration", lambda p: 410.0)
+    monkeypatch.setattr(gt, "_upload_audio_file", lambda p, k: ("files/test", "https://example/files/test"))
+    monkeypatch.setattr(gt, "_delete_audio_file", lambda n, k: None)
+    monkeypatch.setattr(gt, "_generate_with_gemini_transcribe", MagicMock(side_effect=RuntimeError("503")))
+    monkeypatch.setattr(gt.time, "sleep", lambda _: None)
+
+    calls = []
+
+    def fake_fallback(file_uri, api_key, model_name, language=None):
+        calls.append(model_name)
+        if len(calls) == 1:
+            # Truncated at 26s of 410s video with MAX_TOKENS
+            return {
+                "candidates": [
+                    {
+                        "finishReason": "MAX_TOKENS",
+                        "content": {
+                            "parts": [
+                                {"text": json.dumps([{"start": 2.0, "end": 26.0, "speaker": "Speaker 1", "text": "Only opening lines"}])}
+                            ]
+                        },
+                    }
+                ]
+            }
+        # Full transcript up to 405s
+        return {
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps([
+                                    {"start": 2.0, "end": 180.0, "speaker": "Speaker 1", "text": "First half of the video"},
+                                    {"start": 185.0, "end": 405.0, "speaker": "Speaker 1", "text": "Second half of the video"},
+                                ])
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(gt, "_generate_with_gemini_flash_fallback", fake_fallback)
+    cfg = MagicMock(gemini_api_key="test-key", google_api_key=None, transcription_language=None)
+
+    formatted = gt.get_transcript_with_gemini(video_path, cfg)
+
+    assert len(calls) == 2
+    assert "Second half of the video" in formatted
+    assert "Speaker Speaker 1:" not in formatted
+    assert "Speaker 1:" in formatted
+    cached = json.loads(video_path.with_suffix(".transcript_cache.json").read_text(encoding="utf-8"))
+    assert cached["words"][-1]["end"] >= 400_000
+
+
 if __name__ == "__main__":
     test_parse_offset_seconds()
     test_parse_gemini_transcribe_response_valid()

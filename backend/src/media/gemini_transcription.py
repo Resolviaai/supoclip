@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from .common import TRANSCRIPT_CACHE_SCHEMA_VERSION, logger
+from .ffmpeg import ffprobe_duration
 from .transcription import _prepare_audio_for_transcription
 from .transliteration import has_devanagari, phonetic_devanagari_to_roman, clean_hinglish_spelling
 
@@ -271,7 +272,7 @@ def _generate_with_gemini_flash_fallback(
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.0,
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": 65536,
         },
     }
 
@@ -355,6 +356,76 @@ def _chunk_words_into_utterances(
     return utterances
 
 
+def _rechunk_long_utterances(
+    utterances: List[Dict[str, Any]],
+    words: List[Dict[str, Any]],
+    max_words: int = 20,
+    max_duration_ms: int = 15000,
+) -> List[Dict[str, Any]]:
+    """Split oversized speaker-turn utterances into natural clip-ready segments.
+
+    ``gemini-3.5-transcribe`` often groups an entire multi-minute monologue by
+    one speaker into a single utterance even when 2-3 speaker turns exist in the
+    video. Re-chunk every oversized utterance individually so AI clip selection
+    always receives granular timestamps.
+    """
+    if not utterances:
+        return _chunk_words_into_utterances(words) if words else []
+
+    rechunked: List[Dict[str, Any]] = []
+    changed = False
+    for u in utterances:
+        u_words = u.get("words") or []
+        duration_ms = int(u.get("end", 0)) - int(u.get("start", 0))
+        if u_words and (len(u_words) > max_words or duration_ms > max_duration_ms):
+            changed = True
+            rechunked.extend(_chunk_words_into_utterances(u_words))
+        else:
+            rechunked.append(u)
+
+    if changed:
+        logger.info(
+            "Re-chunked oversized Gemini utterances: %d -> %d granular utterances (%d words)",
+            len(utterances),
+            len(rechunked),
+            len(words),
+        )
+    return rechunked
+
+
+def _extract_finish_reason(data: Dict[str, Any]) -> str:
+    """Return the first candidate's finishReason (upper-cased), if present."""
+    candidates = data.get("candidates") or []
+    if not candidates or not isinstance(candidates[0], dict):
+        return ""
+    return str(candidates[0].get("finishReason") or "").upper()
+
+
+def _transcript_coverage_seconds(transcript_data: Dict[str, Any]) -> float:
+    """Return the last timestamp (in seconds) covered by a parsed transcript."""
+    words = transcript_data.get("words") or []
+    if words:
+        return max((float(w.get("end", 0)) for w in words), default=0.0) / 1000.0
+    utterances = transcript_data.get("utterances") or []
+    if utterances:
+        return max((float(u.get("end", 0)) for u in utterances), default=0.0) / 1000.0
+    return 0.0
+
+
+def _is_truncated_transcript(
+    transcript_data: Dict[str, Any],
+    video_duration_seconds: float,
+    finish_reason: str = "",
+) -> bool:
+    """Detect transcripts truncated early (e.g. MAX_TOKENS stopping at 26s of a 410s video)."""
+    if video_duration_seconds < 60.0:
+        return False
+    coverage = _transcript_coverage_seconds(transcript_data)
+    if finish_reason == "MAX_TOKENS" and coverage < video_duration_seconds * 0.8:
+        return True
+    return coverage < video_duration_seconds * 0.35
+
+
 def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """Parse gemini-3.5-transcribe response with word timestamps and speaker diarization."""
     words: List[Dict[str, Any]] = []
@@ -406,14 +477,8 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
                     "words": seg_words,
                 })
 
-    # If single-speaker audio collapsed all words into 1 massive utterance, re-chunk into natural segments
-    if len(utterances) <= 1 and len(words) > 20:
-        logger.info(
-            "gemini-3.5-transcribe returned %d utterances for %d words; re-chunking into granular utterances",
-            len(utterances),
-            len(words),
-        )
-        utterances = _chunk_words_into_utterances(words)
+    # Re-chunk any oversized speaker-turn utterances (single-speaker or multi-speaker) into natural segments
+    utterances = _rechunk_long_utterances(utterances, words)
 
     full_text = " ".join(text_pieces).strip() or " ".join(w["text"] for w in words).strip()
 
@@ -576,36 +641,73 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
     api_key = _resolve_gemini_api_key(runtime_config)
     audio_path = _prepare_audio_for_transcription(video_path)
     language = getattr(runtime_config, "transcription_language", None)
+    try:
+        video_duration = float(ffprobe_duration(video_path) or 0.0)
+    except Exception:
+        video_duration = 0.0
 
-    logger.info("Uploading audio to Gemini for transcription: %s", audio_path)
+    logger.info("Uploading audio to Gemini for transcription: %s (duration=%.1fs)", audio_path, video_duration)
     file_name, file_uri = _upload_audio_file(audio_path, api_key)
 
     transcript_data: Optional[Dict[str, Any]] = None
+    best_partial: Optional[Dict[str, Any]] = None
+    best_partial_coverage = -1.0
+
+    def _record_partial(candidate: Dict[str, Any]) -> None:
+        nonlocal best_partial, best_partial_coverage
+        cov = _transcript_coverage_seconds(candidate)
+        if cov > best_partial_coverage or (
+            cov == best_partial_coverage
+            and len(candidate.get("words") or []) > len((best_partial or {}).get("words") or [])
+        ):
+            best_partial = candidate
+            best_partial_coverage = cov
 
     try:
-        # 1. Primary: gemini-3.5-transcribe
-        try:
-            logger.info("Starting primary transcription with model: gemini-3.5-transcribe")
-            raw_response = _generate_with_gemini_transcribe(file_uri, api_key, language)
-            parsed = _parse_gemini_transcribe_response(raw_response)
-            if parsed.get("words") or parsed.get("text"):
-                transcript_data = parsed
-                logger.info(
-                    "gemini-3.5-transcribe succeeded: %d words, %d utterances",
-                    len(parsed["words"]),
-                    len(parsed["utterances"]),
-                )
-            else:
+        # 1. Primary: gemini-3.5-transcribe (retry once on transient 503/429 before falling back)
+        for attempt in range(2):
+            try:
+                logger.info("Starting primary transcription with model: gemini-3.5-transcribe (attempt %d/2)", attempt + 1)
+                raw_response = _generate_with_gemini_transcribe(file_uri, api_key, language)
+                finish_reason = _extract_finish_reason(raw_response)
+                parsed = _parse_gemini_transcribe_response(raw_response)
+                if parsed.get("words") or parsed.get("text"):
+                    if _is_truncated_transcript(parsed, video_duration, finish_reason):
+                        cov = _transcript_coverage_seconds(parsed)
+                        logger.warning(
+                            "Primary gemini-3.5-transcribe returned low-coverage transcript "
+                            "(%.1fs/%.1fs, finish=%s, words=%d); trying fallback models for fuller coverage",
+                            cov,
+                            video_duration,
+                            finish_reason or "unknown",
+                            len(parsed.get("words") or []),
+                        )
+                        _record_partial(parsed)
+                        break
+                    transcript_data = parsed
+                    logger.info(
+                        "gemini-3.5-transcribe succeeded: %d words, %d utterances",
+                        len(parsed["words"]),
+                        len(parsed["utterances"]),
+                    )
+                    break
                 logger.warning("gemini-3.5-transcribe returned empty output; attempting fallback")
-        except Exception as primary_err:
-            logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
+                break
+            except Exception as primary_err:
+                if attempt == 0 and any(code in str(primary_err) for code in ("503", "429", "500", "502", "504")):
+                    logger.warning("Primary gemini-3.5-transcribe transient error (%s); retrying in 4s...", primary_err)
+                    time.sleep(4)
+                    continue
+                logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
+                break
 
-        # 2. Fallback: gemini-3.1-flash-lite -> gemini-flash-lite-latest -> gemini-3.5-flash-lite -> gemini-3.8-flash
+        # 2. Fallback: prefer non-thinking flash-lite models first so full-length JSON transcripts never truncate
         if not transcript_data:
             fallback_models = [
+                "gemini-3.5-flash-lite",
                 "gemini-3.1-flash-lite",
                 "gemini-flash-lite-latest",
-                "gemini-3.5-flash-lite",
+                "gemini-3-flash-preview",
                 "gemini-3.8-flash",
             ]
             last_fallback_err = None
@@ -613,8 +715,22 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
                 try:
                     logger.info("Attempting fallback transcription with model: %s", f_model)
                     raw_fallback = _generate_with_gemini_flash_fallback(file_uri, api_key, model_name=f_model, language=language)
+                    finish_reason = _extract_finish_reason(raw_fallback)
                     parsed_fallback = _parse_gemini_fallback_response(raw_fallback)
                     if parsed_fallback.get("words") or parsed_fallback.get("text"):
+                        if _is_truncated_transcript(parsed_fallback, video_duration, finish_reason):
+                            cov = _transcript_coverage_seconds(parsed_fallback)
+                            logger.warning(
+                                "Fallback %s returned truncated/low-coverage transcript "
+                                "(%.1fs/%.1fs, finish=%s, words=%d); trying next fallback",
+                                f_model,
+                                cov,
+                                video_duration,
+                                finish_reason or "unknown",
+                                len(parsed_fallback.get("words") or []),
+                            )
+                            _record_partial(parsed_fallback)
+                            continue
                         transcript_data = parsed_fallback
                         logger.info(
                             "%s fallback succeeded: %d words, %d utterances",
@@ -627,6 +743,15 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
                     last_fallback_err = fb_err
                     logger.warning("Fallback model %s failed: %s", f_model, fb_err)
 
+            if not transcript_data and best_partial is not None:
+                logger.warning(
+                    "Using best available partial Gemini transcript (%.1fs/%.1fs, %d words)",
+                    best_partial_coverage,
+                    video_duration,
+                    len(best_partial.get("words") or []),
+                )
+                transcript_data = best_partial
+
             if not transcript_data:
                 raise GeminiTranscriptionError(
                     f"All Gemini transcription attempts failed. Last error: {last_fallback_err}"
@@ -636,25 +761,35 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
         # Cleanup uploaded file from Gemini storage
         _delete_audio_file(file_name, api_key)
 
+    # Ensure utterances are granular before saving cache and formatting for AI analysis
+    utterances = _rechunk_long_utterances(
+        transcript_data.get("utterances") or [],
+        transcript_data.get("words") or [],
+    )
+    transcript_data["utterances"] = utterances
+
     # Save to transcript cache file for subtitles and timeline rendering
     cache_path = video_path.with_suffix(".transcript_cache.json")
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(transcript_data, f, ensure_ascii=False)
-    logger.info("Saved Gemini transcript cache to: %s (%d words)", cache_path, len(transcript_data["words"]))
+    logger.info("Saved Gemini transcript cache to: %s (%d words, %d utterances)", cache_path, len(transcript_data["words"]), len(utterances))
 
     # Format transcript lines for AI clip analysis
     formatted_lines: List[str] = []
-    utterances = transcript_data.get("utterances") or []
-    if len(utterances) <= 1 and len(transcript_data.get("words", [])) > 20:
-        utterances = _chunk_words_into_utterances(transcript_data["words"])
-        transcript_data["utterances"] = utterances
+
+    def _speaker_prefix(spk: Any) -> str:
+        if not spk:
+            return ""
+        text_spk = str(spk).strip()
+        if not text_spk:
+            return ""
+        return f"{text_spk}: " if text_spk.lower().startswith("speaker") else f"Speaker {text_spk}: "
 
     if utterances:
         for u in utterances:
             start_str = format_ms_to_timestamp(u.get("start", 0))
             end_str = format_ms_to_timestamp(u.get("end", 0))
-            spk = u.get("speaker")
-            prefix = f"Speaker {spk}: " if spk else ""
+            prefix = _speaker_prefix(u.get("speaker"))
             formatted_lines.append(f"[{start_str} - {end_str}] {prefix}{u.get('text', '')}")
     elif transcript_data.get("words"):
         # Group into ~15 word chunks
@@ -664,8 +799,7 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
             start_str = format_ms_to_timestamp(chunk[0]["start"])
             end_str = format_ms_to_timestamp(chunk[-1]["end"])
             chunk_text = " ".join(w["text"] for w in chunk)
-            spk = chunk[0].get("speaker")
-            prefix = f"Speaker {spk}: " if spk else ""
+            prefix = _speaker_prefix(chunk[0].get("speaker"))
             formatted_lines.append(f"[{start_str} - {end_str}] {prefix}{chunk_text}")
     else:
         formatted_lines.append(f"[00:00 - 00:00] {transcript_data.get('text', '')}")

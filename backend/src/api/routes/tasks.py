@@ -1800,6 +1800,7 @@ async def resume_task(
                         progress=0,
                         progress_message="Re-queued by user",
                     )
+                    await task_service.task_repo.clear_task_error_metadata(db, task_id)
 
                     processing_mode = (
                         task.get("processing_mode") or runtime_config.default_processing_mode

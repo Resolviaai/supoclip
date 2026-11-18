@@ -579,3 +579,44 @@ async def test_concurrent_requests_cannot_exceed_monthly_quota(client, monkeypat
     assert sum(r.status_code == 429 for r in responses) == 45
     assert enqueue.await_count == 5
     assert len([key for key in pool.data if key.startswith("ai_edit:request:")]) == 5
+
+
+async def test_plan_edit_gemini_coerces_primitive_set_values_and_falls_back(monkeypatch):
+    monkeypatch.setattr(
+        ai,
+        "get_config",
+        lambda: SimpleNamespace(anthropic_api_key=None, gemini_api_key="gemini-key", google_api_key=None),
+    )
+    calls = []
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            calls.append((model, contents, getattr(config, "system_instruction", None)))
+            if len(calls) == 1:
+                raise RuntimeError("503 overloaded")
+            return SimpleNamespace(
+                text=json.dumps({
+                    "summary": "Enlarged captions and enabled uppercase.",
+                    "operations": [
+                        {"type": "set", "setting": "captions.size", "value": 64},
+                        {"type": "set", "setting": "captions.uppercase", "value": True},
+                    ],
+                })
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = FakeModels()
+
+    import google.genai as genai_mod
+
+    monkeypatch.setattr(genai_mod, "Client", FakeClient)
+
+    result = await ai.plan_edit("test context")
+
+    assert len(calls) == 2
+    assert calls[0][1] == "test context"
+    assert calls[0][2] and "editing assistant" in calls[0][2]
+    assert len(result.operations) == 2
+    assert result.operations[0].value == "64"
+    assert result.operations[1].value == "true"
