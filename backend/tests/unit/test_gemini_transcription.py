@@ -140,7 +140,12 @@ def test_chunk_words_into_utterances():
         assert len(c["words"]) > 0
 
 
-from src.media.transliteration import has_devanagari, phonetic_devanagari_to_roman
+from src.media.transliteration import (
+    has_devanagari,
+    phonetic_devanagari_to_roman,
+    normalize_tokens_with_llm,
+    normalize_text_with_llm,
+)
 
 
 def test_devanagari_transliteration():
@@ -149,6 +154,16 @@ def test_devanagari_transliteration():
     roman = phonetic_devanagari_to_roman(sample_hindi)
     assert not has_devanagari(roman)
     assert "kaise" in roman and "shuru" in roman and "video" in roman
+
+
+def test_normalize_tokens_with_llm_preserves_length():
+    tokens = ["प्रीमियर", "प्रो", "में", "कट", "लगाना", "सीखो"]
+    normalized = normalize_tokens_with_llm(tokens)
+    assert len(normalized) == len(tokens)
+    assert not any(has_devanagari(t) for t in normalized)
+    # Check that standard English spelling is produced
+    assert "Premiere" in normalized or "premiere" in [t.lower() for t in normalized]
+    assert "Pro" in normalized or "pro" in [t.lower() for t in normalized]
 
 
 def test_parse_gemini_transcribe_rechunks_multi_speaker_giant_utterance():

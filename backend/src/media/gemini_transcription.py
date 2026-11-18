@@ -23,7 +23,13 @@ import requests
 from .common import TRANSCRIPT_CACHE_SCHEMA_VERSION, logger
 from .ffmpeg import ffprobe_duration
 from .transcription import _prepare_audio_for_transcription
-from .transliteration import has_devanagari, phonetic_devanagari_to_roman, clean_hinglish_spelling
+from .transliteration import (
+    has_devanagari,
+    phonetic_devanagari_to_roman,
+    clean_hinglish_spelling,
+    normalize_tokens_with_llm,
+    normalize_text_with_llm,
+)
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta/files"
@@ -426,7 +432,7 @@ def _is_truncated_transcript(
     return coverage < video_duration_seconds * 0.35
 
 
-def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_gemini_transcribe_response(data: Dict[str, Any], api_key: Optional[str] = None) -> Dict[str, Any]:
     """Parse gemini-3.5-transcribe response with word timestamps and speaker diarization."""
     words: List[Dict[str, Any]] = []
     utterances: List[Dict[str, Any]] = []
@@ -483,16 +489,24 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
     full_text = " ".join(text_pieces).strip() or " ".join(w["text"] for w in words).strip()
 
     # Clean and normalize all transcript text to readable Roman Hinglish (zero Devanagari, standard English spelling)
-    for w in words:
-        raw_text = str(w.get("text", "") or w.get("word", ""))
-        w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
+    if words and any(has_devanagari(w.get("text", "") or w.get("word", "")) for w in words):
+        raw_tokens = [str(w.get("text", "") or w.get("word", "")) for w in words]
+        normalized_tokens = normalize_tokens_with_llm(raw_tokens, api_key=api_key)
+        for w, norm in zip(words, normalized_tokens):
+            w["text"] = norm
+    else:
+        for w in words:
+            raw_text = str(w.get("text", "") or w.get("word", ""))
+            w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
+
     for u in utterances:
-        raw_u = str(u.get("text", ""))
-        u["text"] = phonetic_devanagari_to_roman(raw_u) if has_devanagari(raw_u) else clean_hinglish_spelling(raw_u)
-        for uw in u.get("words", []):
-            raw_uw = str(uw.get("text", "") or uw.get("word", ""))
-            uw["text"] = phonetic_devanagari_to_roman(raw_uw) if has_devanagari(raw_uw) else clean_hinglish_spelling(raw_uw)
-    full_text = phonetic_devanagari_to_roman(full_text) if has_devanagari(full_text) else clean_hinglish_spelling(full_text)
+        if u.get("words"):
+            u["text"] = " ".join(w["text"] for w in u["words"])
+        else:
+            raw_u = str(u.get("text", ""))
+            u["text"] = phonetic_devanagari_to_roman(raw_u) if has_devanagari(raw_u) else clean_hinglish_spelling(raw_u)
+
+    full_text = " ".join(w["text"] for w in words).strip() if words else (phonetic_devanagari_to_roman(full_text) if has_devanagari(full_text) else clean_hinglish_spelling(full_text))
 
     return {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
@@ -503,7 +517,7 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _parse_gemini_fallback_response(data: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_gemini_fallback_response(data: Dict[str, Any], api_key: Optional[str] = None) -> Dict[str, Any]:
     """Parse JSON output from Gemini Flash fallback model into transcript cache format."""
     candidates = data.get("candidates") or []
     raw_text = ""
@@ -608,16 +622,24 @@ def _parse_gemini_fallback_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
     fallback_full_text = " ".join(full_text_pieces)
     # Clean and normalize all fallback transcript text to readable Roman Hinglish (zero Devanagari, standard English spelling)
-    for w in words:
-        raw_text = str(w.get("text", "") or w.get("word", ""))
-        w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
+    if words and any(has_devanagari(w.get("text", "") or w.get("word", "")) for w in words):
+        raw_tokens = [str(w.get("text", "") or w.get("word", "")) for w in words]
+        normalized_tokens = normalize_tokens_with_llm(raw_tokens, api_key=api_key)
+        for w, norm in zip(words, normalized_tokens):
+            w["text"] = norm
+    else:
+        for w in words:
+            raw_text = str(w.get("text", "") or w.get("word", ""))
+            w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
+
     for u in utterances:
-        raw_u = str(u.get("text", ""))
-        u["text"] = phonetic_devanagari_to_roman(raw_u) if has_devanagari(raw_u) else clean_hinglish_spelling(raw_u)
-        for uw in u.get("words", []):
-            raw_uw = str(uw.get("text", "") or uw.get("word", ""))
-            uw["text"] = phonetic_devanagari_to_roman(raw_uw) if has_devanagari(raw_uw) else clean_hinglish_spelling(raw_uw)
-    fallback_full_text = phonetic_devanagari_to_roman(fallback_full_text) if has_devanagari(fallback_full_text) else clean_hinglish_spelling(fallback_full_text)
+        if u.get("words"):
+            u["text"] = " ".join(w["text"] for w in u["words"])
+        else:
+            raw_u = str(u.get("text", ""))
+            u["text"] = phonetic_devanagari_to_roman(raw_u) if has_devanagari(raw_u) else clean_hinglish_spelling(raw_u)
+
+    fallback_full_text = " ".join(w["text"] for w in words).strip() if words else (phonetic_devanagari_to_roman(fallback_full_text) if has_devanagari(fallback_full_text) else clean_hinglish_spelling(fallback_full_text))
 
     return {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
@@ -670,7 +692,7 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
                 logger.info("Starting primary transcription with model: gemini-3.5-transcribe (attempt %d/2)", attempt + 1)
                 raw_response = _generate_with_gemini_transcribe(file_uri, api_key, language)
                 finish_reason = _extract_finish_reason(raw_response)
-                parsed = _parse_gemini_transcribe_response(raw_response)
+                parsed = _parse_gemini_transcribe_response(raw_response, api_key=api_key)
                 if parsed.get("words") or parsed.get("text"):
                     if _is_truncated_transcript(parsed, video_duration, finish_reason):
                         cov = _transcript_coverage_seconds(parsed)
@@ -716,7 +738,7 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
                     logger.info("Attempting fallback transcription with model: %s", f_model)
                     raw_fallback = _generate_with_gemini_flash_fallback(file_uri, api_key, model_name=f_model, language=language)
                     finish_reason = _extract_finish_reason(raw_fallback)
-                    parsed_fallback = _parse_gemini_fallback_response(raw_fallback)
+                    parsed_fallback = _parse_gemini_fallback_response(raw_fallback, api_key=api_key)
                     if parsed_fallback.get("words") or parsed_fallback.get("text"):
                         if _is_truncated_transcript(parsed_fallback, video_duration, finish_reason):
                             cov = _transcript_coverage_seconds(parsed_fallback)

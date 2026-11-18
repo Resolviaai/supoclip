@@ -6,6 +6,7 @@ Add a line here when a pull request changes something a user can see. Use **New*
 
 ## 2026-11-19
 
+- **Fixed:** Video captions now accurately preserve standard English spelling for technical loanwords (such as Premiere Pro, PC, transitions, clients, and courses) and transcribe spoken Hindi into natural Roman Hinglish using LLM token normalization without mechanical phonetic corruptions. ([#454](https://github.com/FujiwaraChoki/supoclip/pull/454))
 - **Fixed:** Transcript analysis and clipping now automatically fail over across alternative Gemini models when an upstream provider experiences transient errors, preventing generations from failing. ([#450](https://github.com/FujiwaraChoki/supoclip/pull/450))
 - **Improved:** On-screen clip hooks and titles default to crisp English with clean Roman script for international social distribution, and series clips consistently use English part numbering. ([#451](https://github.com/FujiwaraChoki/supoclip/pull/451))
 - **Fixed:** The clip editor timeline no longer shows broken thumbnail requests while preparing canvas assets or when switching between clips. ([#452](https://github.com/FujiwaraChoki/supoclip/pull/452))

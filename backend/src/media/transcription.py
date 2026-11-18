@@ -268,7 +268,6 @@ def transcribe_with_youtube_captions(video_url: str) -> Optional[str]:
 
     temp_dir = Path(get_config().temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    subs_path = temp_dir / f"{video_id}.en.vtt"
 
     try:
         ydl_opts = {
@@ -276,16 +275,33 @@ def transcribe_with_youtube_captions(video_url: str) -> Optional[str]:
             "no_warnings": True,
             "writesubtitles": True,
             "writeautomaticsub": True,
-            "subtitleslangs": ["en"],
+            "subtitleslangs": ["en", "hi", "en-orig", "hi-orig"],
             "subtitlesformat": "vtt",
             "skip_download": True,
-            "outtmpl": str(temp_dir / video_id),
+            "outtmpl": str(temp_dir / f"{video_id}.%(ext)s"),
+            "ignoreerrors": True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
 
-        if subs_path.exists():
-            text = subs_path.read_text(encoding="utf-8")
+        vtt_files = list(temp_dir.glob(f"{video_id}*.vtt"))
+        target_file = None
+        if vtt_files:
+            # Prefer English, then Hindi, then first available
+            for f in vtt_files:
+                if ".en" in f.name.lower() or "en-orig" in f.name.lower():
+                    target_file = f
+                    break
+            if not target_file:
+                for f in vtt_files:
+                    if ".hi" in f.name.lower() or "hi-orig" in f.name.lower():
+                        target_file = f
+                        break
+            if not target_file:
+                target_file = vtt_files[0]
+
+        if target_file and target_file.exists():
+            text = target_file.read_text(encoding="utf-8")
             lines = []
             for line in text.splitlines():
                 stripped = line.strip()
@@ -298,10 +314,15 @@ def transcribe_with_youtube_captions(video_url: str) -> Optional[str]:
                     and not stripped.startswith("NOTE")
                     and not re.match(r"^\d+$", stripped)
                 ):
-                    lines.append(stripped)
-            return " ".join(lines)
+                    cleaned_line = re.sub(r"<[^>]+>", "", stripped)
+                    if cleaned_line.strip():
+                        lines.append(cleaned_line.strip())
+            joined = " ".join(lines)
+            if joined:
+                from .transliteration import normalize_text_with_llm
+                return normalize_text_with_llm(joined)
 
-        logger.warning("No English captions found for video %s", video_id)
+        logger.warning("No captions found for video %s", video_id)
         return None
 
     except Exception as e:

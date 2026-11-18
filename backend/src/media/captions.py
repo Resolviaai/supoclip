@@ -1,5 +1,6 @@
 """Captions helpers for the video pipeline."""
 
+import re
 import unicodedata
 from typing import Any
 from typing import Dict
@@ -38,7 +39,13 @@ from .ffmpeg import (
 from .transcription import (
     load_cached_transcript_data,
 )
-from .transliteration import has_devanagari, phonetic_devanagari_to_roman, clean_hinglish_spelling
+from .transliteration import (
+    has_devanagari,
+    phonetic_devanagari_to_roman,
+    clean_hinglish_spelling,
+    normalize_tokens_with_llm,
+    normalize_text_with_llm,
+)
 from .timeline import (
     get_absolute_words_in_range,
     get_words_for_keep_ranges,
@@ -677,17 +684,24 @@ def build_assemblyai_ass_subtitles(
         return False
 
     # Defensive guarantee: Ensure all subtitles and hook titles are rendered in clean Roman Hinglish (no Hindi Devanagari characters, no phonetic spelling corruptions)
-    for w in relevant_words:
-        raw_w = str(w.get("text", "") or w.get("word", ""))
-        if has_devanagari(raw_w):
-            w["text"] = phonetic_devanagari_to_roman(raw_w)
-        else:
+    if relevant_words and (
+        any(has_devanagari(str(w.get("text", "") or w.get("word", ""))) for w in relevant_words)
+        or any(
+            re.search(r"(?:traip|kors|litaralee|dolars|korsej|jast|kats|peesee|preemiyar|traanjishan|klaaints|konphidens|imejin|svaaip|phyoochar|epharts|iyaralee|intarest|rait\s+res)", str(w.get("text", "") or w.get("word", "")).lower())
+            for w in relevant_words
+        )
+    ):
+        raw_tokens = [str(w.get("text", "") or w.get("word", "")) for w in relevant_words]
+        normalized_tokens = normalize_tokens_with_llm(raw_tokens)
+        for w, norm in zip(relevant_words, normalized_tokens):
+            w["text"] = norm
+    else:
+        for w in relevant_words:
+            raw_w = str(w.get("text", "") or w.get("word", ""))
             w["text"] = clean_hinglish_spelling(raw_w)
+
     if hook_title:
-        if has_devanagari(hook_title):
-            hook_title = phonetic_devanagari_to_roman(hook_title)
-        else:
-            hook_title = clean_hinglish_spelling(hook_title)
+        hook_title = normalize_text_with_llm(hook_title)
 
     effective_font_family, template = ensure_glyph_coverage(
         effective_font_family,
