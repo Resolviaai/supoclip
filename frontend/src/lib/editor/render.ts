@@ -59,7 +59,7 @@ const FALLBACK_LOOK: CaptionLook = {
   glow: false,
   backgroundColor: null,
 };
-const HOOK_SIDE_MARGIN = 0.07, HOOK_TOP_MARGIN = 0.12;
+const HOOK_SIDE_MARGIN = 0.07, HOOK_TOP_MARGIN = 0.16;
 
 /** libass sizes fonts by ascender + descender, not the em box CSS uses. */
 function setAssFont(ctx: CanvasRenderingContext2D, font: string, size: number) {
@@ -330,17 +330,43 @@ function drawCaptions(
   ctx.restore();
 }
 
-/** Split the title into one line, or two lines balanced around the middle. */
+const NO_BREAK_AFTER_WORDS = new Set([
+  "a", "an", "the", "this", "that", "these", "those",
+  "my", "your", "his", "her", "its", "our", "their",
+  "no", "every", "each", "any", "some",
+  "i", "you", "we", "they", "he", "she", "it",
+  "to", "of", "in", "on", "at", "by", "for", "from", "with", "into", "about", "without", "vs",
+  "is", "are", "was", "were", "be", "been", "have", "has", "had",
+  "do", "does", "did", "dont", "doesnt", "didnt", "can", "cant", "wont",
+  "will", "would", "should", "could", "not",
+  "and", "or", "but", "if", "as", "than",
+  "ka", "ki", "ke", "ko", "se", "mein", "me", "par", "pe", "aur", "ya", "kyunki", "lekin", "nahi", "mat",
+  "mera", "meri", "mere", "apna", "apni", "apne", "uska", "uski", "unke",
+  "1st", "2nd", "3rd",
+]);
+
+/** Split the title into 1 or 2 lines with intuitive phrasing breaks (mirrors backend _balance_title_lines). */
 function balanceTitle(words: string[], maxChars: number) {
   const text = words.join(" ");
   if (text.length <= maxChars || words.length < 2) return [text];
   let best = [text],
-    longest = text.length;
+    bestScore = Number.POSITIVE_INFINITY;
   for (let i = 1; i < words.length; i++) {
     const lines = [words.slice(0, i).join(" "), words.slice(i).join(" ")];
-    const candidate = Math.max(lines[0].length, lines[1].length);
-    if (candidate < longest) {
-      longest = candidate;
+    const longest = Math.max(lines[0].length, lines[1].length);
+    const overflow = Math.max(0, longest - maxChars) * 2;
+    const prevWord = words[i - 1];
+    const nextWord = words[i];
+    const prevToken = prevWord.toLowerCase().replace(/[^a-z0-9%]+/g, "");
+    let penalty = NO_BREAK_AFTER_WORDS.has(prevToken) ? 6 : 0;
+    const openParens = (lines[0].match(/\(/g) ?? []).length;
+    const closeParens = (lines[0].match(/\)/g) ?? []).length;
+    if (openParens > closeParens) penalty += 10;
+    if (/^["“]/.test(prevWord) && !/["”]$/.test(prevWord)) penalty += 6;
+    if (/[?!]$/.test(prevWord) || nextWord.startsWith("(")) penalty -= 4;
+    const score = longest + overflow + penalty;
+    if (score < bestScore) {
+      bestScore = score;
       best = lines;
     }
   }
@@ -424,8 +450,9 @@ function drawHookTitle(
         ctx.strokeText(word, x, y);
         ctx.restore();
       }
-      // Numbers take the accent; the export also accents power words.
-      ctx.fillStyle = /\d/.test(word) ? look.emphasisColor : style.color;
+      // Numbers and intentionally quoted punch words take the accent; export also accents power words.
+      const isQuoted = /^["“].+["”]$/.test(word);
+      ctx.fillStyle = /\d/.test(word) || isQuoted ? look.emphasisColor : style.color;
       ctx.fillText(word, x, y);
       x += ctx.measureText(word).width + space;
     }

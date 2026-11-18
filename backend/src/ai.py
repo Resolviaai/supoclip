@@ -319,9 +319,18 @@ MICRO-SURGICAL BOUNDARY PHYSICS:
    - Every clip must be self-contained: Hook -> Context/Escalation -> Payoff.
    - A scrolling viewer on TikTok/Reels/Shorts must understand and care without seeing any previous context.
 
-ROMAN HINGLISH & SCRIPT INVARIANT:
-- STRICT LATIN SCRIPT INVARIANT: If the creator speaks Hindi or Hinglish, write hook_title, summary, and explanations using ONLY natural Roman Hinglish (standard English/Latin alphabet, e.g. "10 Minute Mein 14 Lakh Ka Loss", "Confession: Why I Had To Quit"). NEVER use Devanagari script for hook titles. If English, use crisp English.
-- Direct-response headlines: 3-9 words under 60 characters. Curiosity-inducing, punchy, zero generic labels like "Key Takeaway".
+TEXT HOOK ENGINE (ON-SCREEN TITLE TEXT — hook_title):
+- STRICT LATIN SCRIPT INVARIANT: If the creator speaks Hindi or Hinglish, write hook_title, summary, and explanations using ONLY natural Roman Hinglish (standard English/Latin alphabet, e.g. "10 Minute Mein 14 Lakh Ka Loss", "Why 90% Students Quit In 22 Days"). NEVER use Devanagari script for hook titles. If English, use crisp English.
+- FORMULA (SUBJECT + 1 CORE COMPONENT): Every hook_title MUST pair a clear subject with ONE of these three retention drivers:
+  1. Pain Point Reminder (call out the exact mistake, loss, or frustration)
+  2. Dream Outcome Teaser (tease the exact result or payoff)
+  3. Future Potential State Change (show the before-to-after shift)
+- 6 WINNING CATEGORIES: Pick whichever fits the clip best — Outcome, Video Subject, Core Takeaway, Core Question, Series Name, or Label (e.g. "Uber Eats For Sunlight"). Zero generic labels like "Key Takeaway" or "Important Lesson".
+- EXTREME SPECIFICITY: Always pull exact numbers, timeframes, or amounts from the transcript ("22 Days" NOT "a few weeks"; "$2,700" NOT "thousands"; "14 Lakh" NOT "huge loss"). Never invent numbers not in the transcript.
+- POWER WORDS: Use 1-3 word attention magnets ("Secret", "Killer", "Nobody Knows", "Speed Ran", "Brutal", "Zero", "Hidden", "Mistake").
+- ZERO FILLER / TRANSITION WORDS: Never use generic connectors like "and", "but", "therefore", "however", "basically", or "actually" inside hook_title. Write "Best AI Tools I Use Nobody Knows About", NOT "Best AI Tools I Use, But Nobody Knows About".
+- MINIMAL PUNCTUATION: Never use commas, semicolons, colons, or periods in hook_title. Only parentheses (...) or quotation marks "..." around a punch word are allowed when helpful (e.g. Best AI Tools "Secret" I Use), plus "?" for a Core Question.
+- COMPACT 2-LINE BUDGET: 3-8 words under 52 characters so it renders cleanly in 1-2 scannable lines.
 
 GROUNDING RULES:
 1. Use only the provided transcript lines and timestamps
@@ -829,7 +838,7 @@ JSON-only output requirements:
 - Top-level keys: "most_relevant_segments", "summary", "key_topics".
 - Segment keys: "start_time", "end_time", "text", "relevance_score", "reasoning", "virality", "hook_title".
 - Optional segment keys "hook_start_time"/"hook_end_time": null unless a later 2-5 second line stands alone and the real opening is already a complete setup. The clip is not replayed from that line by default.
-- "hook_title" is a 3-9 word plain-text headline for the clip, in the transcript's language, grounded in the segment (no hashtags, emojis, or quotes).
+- "hook_title" is a punchy 3-8 word on-screen text hook (Subject + Pain Point / Dream Outcome / State Change), using exact numbers from the transcript and power words, zero filler connectors ("and", "but", "therefore"), no commas/semicolons/periods (only optional "..." or (...) emphasis or "?" for questions), in the transcript's language (Roman Hinglish if Hindi/Hinglish), no hashtags or emojis.
 - Virality keys: "hook_score", "engagement_score", "value_score", "shareability_score", "total_score", "hook_type", "virality_reasoning".
 - Do not return segments shorter than {bounds.minimum} seconds or longer than {bounds.maximum} seconds.
 
@@ -837,18 +846,52 @@ JSON-only output requirements:
 {transcript}"""
 
 
+_HOOK_OUTER_QUOTES = (
+    ('"', '"'),
+    ("'", "'"),
+    ("`", "`"),
+    ("“", "”"),
+    ("‘", "’"),
+)
+_HOOK_COMMA_CONNECTOR_RE = re.compile(
+    r"\s*[,;]\s+(?:but|therefore|however|so|and)\b\s*", re.IGNORECASE
+)
+_SERIES_PREFIX_RE = re.compile(r"^\s*\S{1,12}\s+\d+\s*[:：–—-]\s*", re.UNICODE)
+
+
 def sanitize_hook_title(raw: Optional[str]) -> Optional[str]:
     """Normalize an AI-provided hook title for on-screen rendering.
 
-    Strips wrapping quotes/markdown, collapses whitespace, drops hashtags, and
-    trims to a word-boundary length cap. Returns None when nothing usable is
-    left so callers can simply skip the overlay.
+    Unwraps full-string outer quotes (while preserving intentional internal
+    emphasis quotes like ``Best AI Tools "Secret" I Use`` and parentheses),
+    drops hashtags, strips internal commas/semicolons and comma-led filler
+    connectors (``, but `` / ``, therefore ``), and trims to a word-boundary
+    length cap. Returns None when nothing usable is left.
     """
     if not raw:
         return None
     title = str(raw).strip()
-    title = title.strip("\"'`“”‘’").strip()
+    # Unwrap matching outer quotes only, keeping internal emphasis quotes intact.
+    changed = True
+    while changed and len(title) >= 2:
+        changed = False
+        for left, right in _HOOK_OUTER_QUOTES:
+            if title.startswith(left) and title.endswith(right):
+                inner = title[len(left) : -len(right)].strip()
+                # Avoid unwrapping if the quotes belong to separate internal spans.
+                if left == right and inner.count(left) % 2 != 0:
+                    continue
+                title = inner
+                changed = True
+                break
     title = re.sub(r"#\w+", "", title)
+    # Remove comma-led transition fillers ("..., but Nobody Knows" -> "... Nobody Knows").
+    title = _HOOK_COMMA_CONNECTOR_RE.sub(" ", title)
+    # Strip internal commas/semicolons (keep numeric separators like $2,700 or 10,000).
+    title = re.sub(r"(?<!\d)[,;]+|[,;]+(?!\d)", " ", title)
+    # Remove stray mid-title colons unless it is a series prefix ("Part 1: ...").
+    if not _SERIES_PREFIX_RE.match(title):
+        title = re.sub(r"\s*:\s+", " ", title)
     title = re.sub(r"\s+", " ", title).strip()
     # Drop trailing sentence punctuation but keep ?/! (they carry the hook).
     title = title.rstrip(".,;:-–— ").strip()

@@ -84,11 +84,15 @@ POWER_WORDS: Set[str] = {
     "never", "always", "everything", "nothing", "everyone", "nobody", "anyone",
     "best", "worst", "most", "biggest", "huge", "massive", "tiny", "every",
     "only", "first", "last", "free", "now", "today", "instantly", "forever",
-    "guaranteed", "proven", "secret", "truth", "fact", "literally", "actually",
+    "guaranteed", "proven", "secret", "secrets", "truth", "fact", "literally", "actually",
     "exactly", "must", "need", "stop", "warning", "danger", "critical", "key",
-    "important", "remember", "mistake", "wrong", "right", "perfect", "ultimate",
+    "important", "remember", "mistake", "mistakes", "wrong", "right", "perfect", "ultimate",
     "powerful", "insane", "crazy", "incredible", "amazing", "shocking", "viral",
     "million", "billion", "thousand", "percent", "double", "triple", "ten",
+    "killer", "hidden", "speed", "hack", "hacks", "cheat", "banned", "broken",
+    "exposed", "brutal", "unfair", "zero", "instant", "dead", "trap", "lie",
+    "lies", "myth", "destroy", "destroyed", "quit", "failed", "failure", "rich",
+    "broke", "loss", "lakh", "crore",
 }
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9%]+")

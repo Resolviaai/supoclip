@@ -121,8 +121,9 @@ HOOK_TITLE_MIN_SECONDS = 1.5
 
 HOOK_TITLE_SIDE_MARGIN_FRAC = 0.07
 
-# Clears the platform's top UI (tabs, search) with room to spare.
-HOOK_TITLE_TOP_MARGIN_FRAC = 0.12
+# Upper-third safe zone: clears platform top UI (status bar, tabs) and sits
+# cleanly above the speaker's eyes (~36-38% down on vertical clips).
+HOOK_TITLE_TOP_MARGIN_FRAC = 0.16
 
 ANALYSIS_SEGMENT_MIN_WORDS = 8
 

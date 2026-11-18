@@ -323,19 +323,67 @@ def _title_lines(title: str, max_chars: int) -> List[str]:
     return [title[:middle], title[middle:]]
 
 
+# Words that bind tightly to the following word: avoid stranding them at the
+# end of line 1 so two-line hooks break on natural phrasing boundaries
+# (e.g. "The Best AI Tools I Use" / "Nobody Knows About", never "... I" / "Use ...").
+_NO_BREAK_AFTER_WORDS = frozenset({
+    # Articles & determiners
+    "a", "an", "the", "this", "that", "these", "those",
+    "my", "your", "his", "her", "its", "our", "their",
+    "no", "every", "each", "any", "some",
+    # Subject pronouns
+    "i", "you", "we", "they", "he", "she", "it",
+    # Prepositions & infinitive marker
+    "to", "of", "in", "on", "at", "by", "for", "from", "with", "into", "about", "without", "vs",
+    # Auxiliaries & negations
+    "is", "are", "was", "were", "be", "been", "have", "has", "had",
+    "do", "does", "did", "dont", "doesnt", "didnt", "can", "cant", "wont",
+    "will", "would", "should", "could", "not",
+    # Conjunctions
+    "and", "or", "but", "if", "as", "than",
+    # Hindi/Hinglish connectors, possessives & postpositions
+    "ka", "ki", "ke", "ko", "se", "mein", "me", "par", "pe", "aur", "ya", "kyunki", "lekin", "nahi", "mat",
+    "mera", "meri", "mere", "apna", "apni", "apne", "uska", "uski", "unke",
+    # Ordinals that bind tightly to the following noun ("1st Sem", "2nd Rule")
+    "1st", "2nd", "3rd",
+})
+
+
 def _balance_title_lines(words: List[str], max_chars: int) -> List[str]:
-    """Split title words into one line, or two lines balanced around the middle."""
+    """Split title words into 1 or 2 lines with intuitive phrasing breaks.
+
+    Balances line widths while penalizing splits that strand an article,
+    pronoun, preposition, or auxiliary verb at the end of line 1, or bisect
+    a parenthetical / quoted emphasis span.
+    """
     text = " ".join(words)
     if len(text) <= max_chars or len(words) < 2:
         return [text]
     best_lines = [text]
-    best_longest = len(text)
+    best_score = float("inf")
     for i in range(1, len(words)):
         first = " ".join(words[:i])
         second = " ".join(words[i:])
         longest = max(len(first), len(second))
-        if longest < best_longest:
-            best_longest = longest
+        overflow = max(0, longest - max_chars) * 2
+        prev_word = words[i - 1]
+        next_word = words[i]
+        prev_token = normalize_token(prev_word)
+        penalty = 0
+        if prev_token in _NO_BREAK_AFTER_WORDS:
+            penalty += 6
+        # Never bisect an unclosed parenthetical span like "(Beat Procrastination In 5s)".
+        if first.count("(") > first.count(")"):
+            penalty += 10
+        # Keep opening quote attached to its phrase.
+        if prev_word.startswith(('"', "“")) and not prev_word.endswith(('"', "”")):
+            penalty += 6
+        # Prefer natural clause breaks right after ?/! or right before a parenthetical.
+        if prev_word.endswith(("?", "!")) or next_word.startswith("("):
+            penalty -= 4
+        score = longest + overflow + penalty
+        if score < best_score:
+            best_score = score
             best_lines = [first, second]
     return best_lines
 
@@ -471,13 +519,19 @@ def build_hook_title_ass(
         f"1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},8,60,60,{margin_v},1"
     )
 
-    # Accent power words / numbers in the template highlight colour.
+    # Accent power words, numbers, and intentionally quoted punch words (e.g. "Secret").
     rendered_lines: List[str] = []
     for line in lines:
         spans: List[str] = []
         for word in line.split():
             token = normalize_token(word)
-            accented = bool(token) and (token in POWER_WORDS or any(c.isdigit() for c in token))
+            is_quoted = len(word) >= 3 and (
+                (word.startswith('"') and word.endswith('"'))
+                or (word.startswith("“") and word.endswith("”"))
+            )
+            accented = is_quoted or (
+                bool(token) and (token in POWER_WORDS or any(c.isdigit() for c in token))
+            )
             color = highlight if accented else primary
             spans.append(f"{{\\c{color}}}{escape_ass_text(word)}")
         rendered_lines.append(" ".join(spans))
