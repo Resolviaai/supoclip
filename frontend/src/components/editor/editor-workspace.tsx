@@ -345,18 +345,18 @@ export function EditorWorkspace({
   return (
     // data-editor-studio hides the app's floating feedback button, which would cover the timeline.
     <div data-editor-studio="" className="flex min-h-dvh flex-col bg-stone-100 lg:h-dvh lg:overflow-hidden dark:bg-stone-950">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 lg:h-14 lg:flex-nowrap lg:py-0">
-        <Button variant="ghost" size="icon" className="rounded-full" asChild>
+      <header className="flex shrink-0 items-center gap-x-1.5 sm:gap-x-3 px-2 sm:px-3 py-2 lg:h-14 lg:py-0 overflow-hidden">
+        <Button variant="ghost" size="icon" className="shrink-0 rounded-full" asChild>
           <Link href={`/tasks/${taskId}`} aria-label={t("editPage.back")}>
             <ArrowLeft />
           </Link>
         </Button>
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h1 className="min-w-0 truncate text-sm font-semibold">{title}</h1>
-          <span aria-hidden className="text-muted-foreground">/</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2 overflow-hidden">
+          <h1 className="hidden sm:block min-w-0 truncate text-sm font-semibold">{title}</h1>
+          <span aria-hidden className="hidden sm:inline text-muted-foreground">/</span>
           <Popover open={clipsOpen} onOpenChange={setClipsOpen}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 shrink-0 gap-1.5 rounded-full bg-background px-3 shadow-[0_1px_2px_rgb(0_0_0/0.05)] ring-1 ring-black/[0.06] hover:bg-background/80 dark:ring-white/10" aria-label={t("workspace.switchClip")}>
+              <Button variant="ghost" size="sm" className="h-8 min-w-0 max-w-full gap-1.5 rounded-full bg-background px-2.5 sm:px-3 shadow-[0_1px_2px_rgb(0_0_0/0.05)] ring-1 ring-black/[0.06] hover:bg-background/80 dark:ring-white/10" aria-label={t("workspace.switchClip")}>
                 <span
                   aria-hidden
                   className="h-5 w-3 shrink-0 rounded-[2px] bg-muted"
@@ -365,11 +365,11 @@ export function EditorWorkspace({
                     backgroundSize: "auto 100%",
                   }}
                 />
-                <span className="max-w-48 truncate">{clipPickerLabel(t, clip)}</span>
-                <span className="text-muted-foreground tabular-nums">
+                <span className="min-w-0 max-w-[28vw] sm:max-w-44 truncate">{clipPickerLabel(t, clip)}</span>
+                <span className="shrink-0 text-muted-foreground tabular-nums">
                   {t("workspace.clipOf", { count: clips.length })}
                 </span>
-                <ChevronDown className="opacity-60" />
+                <ChevronDown className="shrink-0 opacity-60" />
               </Button>
             </PopoverTrigger>
             <PopoverContent align="start" className="w-80 p-0">
@@ -478,13 +478,15 @@ export function EditorWorkspace({
           >
             <Redo2 />
           </ToolButton>
-          <ToolButton
-            label={t("workspace.shortcuts")}
-            shortcut="?"
-            onClick={() => setHelpOpen(true)}
-          >
-            <Keyboard />
-          </ToolButton>
+          <span className="hidden sm:inline-flex">
+            <ToolButton
+              label={t("workspace.shortcuts")}
+              shortcut="?"
+              onClick={() => setHelpOpen(true)}
+            >
+              <Keyboard />
+            </ToolButton>
+          </span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label={t("workspace.more")}>
@@ -524,9 +526,9 @@ export function EditorWorkspace({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <Button className="rounded-full px-4" disabled={!doc} onClick={() => setExportOpen(true)}>
+        <Button className="shrink-0 rounded-full px-3 sm:px-4" disabled={!doc} onClick={() => setExportOpen(true)}>
           <Download />
-          {t("workspace.export")}
+          <span className="hidden sm:inline">{t("workspace.export")}</span>
         </Button>
       </header>
       {(editor.error || editor.storageError || asset?.sourceIncomplete) && (

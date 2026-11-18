@@ -15,11 +15,28 @@ export interface GenerationSummary extends WorkflowSummaryFields {
   updated_at: string;
 }
 
+let cachedGenerations: GenerationSummary[] | null = null;
+let inflightGenerations: Promise<GenerationSummary[]> | null = null;
+
+/** Last loaded generations list for instant zero-flash tab switching. */
+export function getCachedGenerations(): GenerationSummary[] | null {
+  return cachedGenerations;
+}
+
 export async function fetchGenerations(): Promise<GenerationSummary[]> {
-  const response = await fetch("/api/tasks/", { cache: "no-store" });
-  if (!response.ok) throw new Error(`Failed to fetch tasks: ${response.status}`);
-  const data = await response.json();
-  return (data.tasks || []) as GenerationSummary[];
+  if (inflightGenerations) return inflightGenerations;
+  inflightGenerations = fetch("/api/tasks/", { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`Failed to fetch tasks: ${response.status}`);
+      const data = await response.json();
+      const tasks = (data.tasks || []) as GenerationSummary[];
+      cachedGenerations = tasks;
+      return tasks;
+    })
+    .finally(() => {
+      inflightGenerations = null;
+    });
+  return inflightGenerations;
 }
 
 export function coverClipUrl(generation: Pick<GenerationSummary, "id" | "cover_clip_id">) {

@@ -40,7 +40,7 @@ import { track } from "@/lib/datafast";
 import { taskPathFromCreate } from "@/lib/task-create";
 import { formatSupportMessage, parseApiError, type ApiErrorInfo } from "@/lib/api-error";
 import { buildFontOptionsPayload, FONT_TEMPLATE_DEFAULT_VALUE, savedCaptionDefaults, STOCK_FONT_DEFAULTS } from "@/lib/font-options";
-import { fetchGenerations, type GenerationSummary } from "@/lib/generations";
+import { fetchGenerations, getCachedGenerations, type GenerationSummary } from "@/lib/generations";
 import { CLIP_LENGTHS, isClipLength, type ClipLength } from "@/lib/clip-duration";
 import {
   INSTRUCTIONS_MAX_CHARS, isWorkflow, MIN_SOURCE_SECONDS, normalizeTopic, PART_COUNT_OPTIONS, TOPIC_MAX_CHARS, topicIssue,
@@ -233,7 +233,10 @@ export default function HomeApp() {
     try { window.localStorage.setItem(WORKFLOW_STORAGE_KEY, workflow); } catch { /* storage blocked: still works for this visit */ }
   }, [workflow]);
 
-  const [recent, setRecent] = useState<GenerationSummary[] | null>(null);
+  const [recent, setRecent] = useState<GenerationSummary[] | null>(() => {
+    const cached = getCachedGenerations();
+    return cached ? cached.slice(0, 8) : null;
+  });
   const [billingSummary, updateBillingSummary] = useBillingSummary(Boolean(session?.user?.id));
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason | null>(null);
   const [lastUpgradeReason, setLastUpgradeReason] = useState<UpgradeReason>({ kind: "start" });

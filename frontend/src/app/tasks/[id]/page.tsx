@@ -829,13 +829,14 @@ export default function TaskPage() {
     </div>
   );
 
-  const publishButton = (clip: Clip) => task?.status === "completed" ? (
+  const publishButton = (clip: Clip, compact = false) => task?.status === "completed" ? (
     <ClipPublishButton
       taskId={task.id}
       clip={clip}
       connections={socialConnections}
       providers={socialProviders}
       onChanged={loadSocialPosts}
+      compact={compact}
     />
   ) : null;
 
@@ -851,7 +852,7 @@ export default function TaskPage() {
       onDownload={() => handleDownloadClip(clip)}
       onDelete={readOnly ? undefined : () => setDeletingClipId(clip.id)}
       editable={task?.status === "completed" && !readOnly}
-      publishAction={publishButton(clip)}
+      publishAction={publishButton(clip, true)}
     />
   );
 

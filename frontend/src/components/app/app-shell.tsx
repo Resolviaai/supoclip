@@ -62,12 +62,23 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
   const pathname = usePathname();
   const router = useRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [billing] = useBillingSummary(Boolean(session?.user));
   // The editor is a full-screen workspace with its own back button: no app
   // chrome there. Elements stay in place (hidden) so children keep their position.
   const immersive = /^\/tasks\/[^/]+\/edit/.test(pathname);
   const compact = immersive;
-  const navigate = useCallback((path: string) => router.push(path), [router]);
+  const navigate = useCallback((path: string) => {
+    setPendingPath(path);
+    router.push(path);
+  }, [router]);
+
+  useEffect(() => {
+    setPendingPath(null);
+  }, [pathname]);
+
+  const activePath = pendingPath ?? pathname;
+  const isNavigating = pendingPath !== null && pendingPath !== pathname;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -100,6 +111,11 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
 
   return (
     <div data-app-shell={user ? "" : undefined} className={cn(user && "flex min-h-dvh bg-canvas")}>
+      {isNavigating ? (
+        <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden bg-brand/20">
+          <div className="progress-sheen h-full w-full bg-brand" />
+        </div>
+      ) : null}
       {user ? <aside
         className={cn(
           "sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-sidebar-border bg-sidebar",
@@ -118,9 +134,9 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
 
         <nav aria-label={t("search.mainNav")} className="flex w-full flex-col gap-0.5">
           {items.map((item) => {
-            const active = item.match(pathname);
+            const active = item.match(activePath);
             return (
-              <SidebarLink key={item.href} compact={compact} href={item.href} label={item.label} active={active} tour={"labelKey" in item ? `nav-${item.labelKey}` : undefined}>
+              <SidebarLink key={item.href} compact={compact} href={item.href} label={item.label} active={active} tour={"labelKey" in item ? `nav-${item.labelKey}` : undefined} onNavigate={() => { if (item.href !== pathname) setPendingPath(item.href); }}>
                 <item.icon className="size-4" />
               </SidebarLink>
             );
@@ -180,11 +196,13 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
           className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around border-t border-border/40 bg-background/85 px-2 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-2xl shadow-[0_-4px_24px_rgba(0,0,0,0.06)] md:hidden"
         >
           {mobileNav.map((item) => {
-            const active = item.match(pathname);
+            const active = item.match(activePath);
             return (
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch
+                onClick={() => { if (item.href !== pathname) setPendingPath(item.href); }}
                 data-tour={`nav-${item.labelKey}`}
                 aria-current={active ? "page" : undefined}
                 className={cn(
@@ -221,13 +239,15 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
   );
 }
 
-function SidebarLink({ href, label, active, compact, shortcut, className, tour, children }: {
-  href: string; label: string; active?: boolean; compact: boolean; shortcut?: string; className?: string; /** `data-tour` target for the welcome tour. */ tour?: string; children: React.ReactNode;
+function SidebarLink({ href, label, active, compact, shortcut, className, tour, onNavigate, children }: {
+  href: string; label: string; active?: boolean; compact: boolean; shortcut?: string; className?: string; /** `data-tour` target for the welcome tour. */ tour?: string; onNavigate?: () => void; children: React.ReactNode;
 }) {
   const link = (
     <Link
       data-tour={tour}
       href={href}
+      prefetch
+      onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       aria-label={compact ? label : undefined}
       className={cn(

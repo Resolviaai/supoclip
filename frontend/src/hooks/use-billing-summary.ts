@@ -31,19 +31,25 @@ export interface BillingSummary {
   max_upload_bytes?: number;
 }
 
-// One in-flight request shared by the shell and the page it wraps.
+// One in-flight request shared by the shell and the page it wraps, plus warm cache for instant tab switches.
 let pending: Promise<BillingSummary | null> | null = null;
+let cachedSummary: BillingSummary | null = null;
 
 function loadBillingSummary() {
   pending ??= fetch("/api/tasks/billing-summary", { cache: "no-store" })
-    .then((response) => (response.ok ? (response.json() as Promise<BillingSummary>) : null))
+    .then(async (response) => {
+      if (!response.ok) return null;
+      const data = (await response.json()) as BillingSummary;
+      cachedSummary = data;
+      return data;
+    })
     .catch(() => null)
     .finally(() => { setTimeout(() => { pending = null; }, 5_000); });
   return pending;
 }
 
 export function useBillingSummary(enabled: boolean) {
-  const [summary, setSummary] = useState<BillingSummary | null>(null);
+  const [summary, setSummary] = useState<BillingSummary | null>(() => (enabled ? cachedSummary : null));
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
@@ -51,7 +57,11 @@ export function useBillingSummary(enabled: boolean) {
     return () => { cancelled = true; };
   }, [enabled]);
   const update = useCallback((patch: Partial<BillingSummary>) => {
-    setSummary((current) => (current ? { ...current, ...patch } : current));
+    setSummary((current) => {
+      const next = current ? { ...current, ...patch } : current;
+      if (next) cachedSummary = next;
+      return next;
+    });
   }, []);
   return [summary, update] as const;
 }

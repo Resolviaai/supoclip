@@ -157,7 +157,9 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
           </Button>
           {editable && (
             <Button size="sm" variant="outline" className="h-8 px-2 text-xs rounded-lg active:scale-95 transition-transform" asChild>
-              <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`}><Scissors className="size-3.5" />{t("edit")}</Link>
+              <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`} aria-label={t("edit")}>
+                <Scissors className="size-3.5" /><span className="hidden @min-[220px]:inline">{t("edit")}</span>
+              </Link>
             </Button>
           )}
           {publishAction}
@@ -340,7 +342,7 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
                 {clip.text && <TranscriptPreview text={clip.text} clipTitle={clipTitle(clip, t)} />}
                 {children}
               </div>
-              <div className="sticky bottom-0 z-10 mt-auto flex flex-wrap items-center gap-2 border-t bg-background/95 backdrop-blur-xl px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-5 md:py-3 md:bg-muted/30">
+              <div className="sticky bottom-0 z-10 mt-auto flex items-center gap-2 border-t bg-background/95 backdrop-blur-xl px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:flex-wrap md:px-5 md:py-3 md:bg-muted/30">
                 <Button
                   size="sm"
                   onClick={onDownload}
@@ -354,9 +356,13 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
                     size="sm"
                     variant="outline"
                     asChild
-                    className="h-10 rounded-xl text-xs sm:text-sm active:scale-95 transition-transform md:h-8 md:rounded-lg"
+                    className="h-10 rounded-xl px-3 text-xs sm:text-sm active:scale-95 transition-transform md:h-8 md:rounded-lg"
                   >
-                    <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`}><Scissors className="size-4" />{t("openInEditor")}</Link>
+                    <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`}>
+                      <Scissors className="size-4" />
+                      <span className="hidden sm:inline">{t("openInEditor")}</span>
+                      <span className="sm:hidden">{t("edit")}</span>
+                    </Link>
                   </Button>
                 )}
                 {actions}
@@ -364,10 +370,11 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="ml-auto h-10 px-3 rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive active:scale-90 transition-transform md:h-8 md:rounded-lg"
+                    aria-label={t("delete")}
+                    className="ml-auto h-10 px-2.5 sm:px-3 rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive active:scale-90 transition-transform md:h-8 md:rounded-lg"
                     onClick={onDelete}
                   >
-                    <Trash2 className="size-4" />{t("delete")}
+                    <Trash2 className="size-4" /><span className="hidden sm:inline">{t("delete")}</span>
                   </Button>
                 )}
               </div>

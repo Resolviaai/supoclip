@@ -12,8 +12,13 @@ export function ClipCover({ src, className, children }: {
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [failed, setFailed] = useState(false);
-  const play = () => { void videoRef.current?.play().catch(() => {}); };
-  const stop = () => {
+  const [ready, setReady] = useState(false);
+  const play = (event: React.PointerEvent) => {
+    if (event.pointerType !== "mouse") return;
+    void videoRef.current?.play().catch(() => {});
+  };
+  const stop = (event: React.PointerEvent) => {
+    if (event.pointerType !== "mouse") return;
     const video = videoRef.current;
     if (!video) return;
     video.pause();
@@ -26,7 +31,12 @@ export function ClipCover({ src, className, children }: {
       onPointerEnter={play}
       onPointerLeave={stop}
     >
-      {src && !failed ? (
+      {(!src || failed || !ready) && (
+        <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_30%_20%,oklch(0.32_0.015_50),oklch(0.16_0.005_50))]">
+          <Film className="size-6 text-white/25" aria-hidden />
+        </div>
+      )}
+      {src && !failed && (
         <video
           ref={videoRef}
           src={`${src}#t=0.5`}
@@ -34,15 +44,22 @@ export function ClipCover({ src, className, children }: {
           loop
           playsInline
           preload="metadata"
+          onLoadedMetadata={(e) => {
+            const video = e.currentTarget;
+            if (video.currentTime < 0.1 && video.duration > 0.6) {
+              try { video.currentTime = 0.5; } catch { /* ignore seek errors */ }
+            }
+          }}
+          onLoadedData={() => setReady(true)}
+          onSeeked={() => setReady(true)}
           onError={() => setFailed(true)}
-          className="absolute inset-0 h-full w-full object-cover"
+          className={cn(
+            "absolute inset-0 h-full w-full object-cover transition-opacity duration-300",
+            ready ? "opacity-100" : "opacity-0",
+          )}
           aria-hidden
           tabIndex={-1}
         />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_30%_20%,oklch(0.35_0.02_50),oklch(0.18_0.005_50))]">
-          <Film className="size-6 text-white/30" aria-hidden />
-        </div>
       )}
       {children}
     </div>

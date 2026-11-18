@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { GenerationCard } from "@/components/app/generation-card";
-import { fetchGenerations, type GenerationSummary } from "@/lib/generations";
+import { fetchGenerations, getCachedGenerations, type GenerationSummary } from "@/lib/generations";
 import { groupByOriginalVideo, type LibrarySort } from "@/lib/library-groups";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -62,9 +62,10 @@ async function buildSupportError(response: Response, fallbackMessage: string) {
 export default function ListPage() {
   const t = useTranslations("library");
   const { data: session, isPending } = useSession();
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const cached = getCachedGenerations();
+  const [tasks, setTasks] = useState<Task[]>(() => cached ?? []);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => cached === null);
   const [error, setError] = useState<string | null>(null);
   const [batchNotice, setBatchNotice] = useState<{
     tone: "success" | "error";
@@ -99,7 +100,7 @@ export default function ListPage() {
       }
 
       try {
-        setIsLoading(true);
+        if (getCachedGenerations() === null) setIsLoading(true);
         setError(null);
         const nextTasks = await fetchTasksList();
         setTasks(nextTasks);

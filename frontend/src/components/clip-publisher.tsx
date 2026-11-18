@@ -77,6 +77,8 @@ interface ClipPublishButtonProps {
   connections: SocialConnection[];
   providers: SocialProviderStatus[];
   onChanged: () => void | Promise<void>;
+  /** Compact icon-priority layout for tight mobile cards. */
+  compact?: boolean;
 }
 
 interface ClipPostListProps {
@@ -306,6 +308,7 @@ export function ClipPublishButton({
   connections,
   providers,
   onChanged,
+  compact = false,
 }: ClipPublishButtonProps) {
   const t = useTranslations("social");
   const tTask = useTranslations("task");
@@ -547,9 +550,15 @@ export function ClipPublishButton({
 
   return (
     <>
-      <Button size="sm" variant="outline" onClick={openSheet}>
-        <Send className="w-4 h-4" />
-        {t("publish")}
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={openSheet}
+        aria-label={t("publish")}
+        className={compact ? "h-8 px-2 text-xs rounded-lg active:scale-95 transition-transform" : "h-10 rounded-xl text-xs sm:text-sm active:scale-95 transition-transform md:h-8 md:rounded-lg"}
+      >
+        <Send className={compact ? "size-3.5" : "size-4"} />
+        <span className={compact ? "hidden @min-[230px]:inline" : undefined}>{t("publish")}</span>
       </Button>
 
       <Sheet open={open} onOpenChange={changeOpen}>
