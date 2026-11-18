@@ -423,9 +423,14 @@ def _is_truncated_transcript(
     video_duration_seconds: float,
     finish_reason: str = "",
 ) -> bool:
-    """Detect transcripts truncated early (e.g. MAX_TOKENS stopping at 26s of a 410s video)."""
+    """Detect transcripts truncated early or starved of words (e.g. 12 words for a 427s video)."""
     if video_duration_seconds < 60.0:
         return False
+    words = transcript_data.get("words") or []
+    # Real speech in video averages 100-160 words per minute. Less than 20 wpm is clearly starved or hallucinated.
+    min_expected_words = max(20, int((video_duration_seconds / 60.0) * 20))
+    if len(words) < min_expected_words:
+        return True
     coverage = _transcript_coverage_seconds(transcript_data)
     if finish_reason == "MAX_TOKENS" and coverage < video_duration_seconds * 0.8:
         return True
