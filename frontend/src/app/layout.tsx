@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
 import { Geist, Geist_Mono, Syne } from "next/font/google";
@@ -37,6 +37,18 @@ const isDataFastEnabled = Boolean(dataFastWebsiteId && dataFastDomain);
 // Tilly analytics runs next to DataFast; it only uses its own cookies and window.tilly.
 const tillyWebsiteId = process.env.NEXT_PUBLIC_TILLY_WEBSITE_ID;
 
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#070a0f" },
+  ],
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
+  userScalable: false,
+};
+
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("metadata");
 
@@ -54,6 +66,12 @@ export async function generateMetadata(): Promise<Metadata> {
   category: t("category"),
   icons: {
     icon: "/icon.png",
+    apple: "/icon.png",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "SupoClip",
   },
   itunes: {
     appId: APP_STORE_ID,

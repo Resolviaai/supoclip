@@ -1361,7 +1361,7 @@ export default function HomeApp() {
                   size="icon"
                   aria-label={t(`generateByWorkflow.${activeWorkflow}`)}
                   disabled={!hasSource || isLoading || lengthLoading || awaitingWorkflows || topicProblem !== null || instructionsTooLong || advancedProblem !== null}
-                  className="size-9 rounded-full bg-brand text-brand-foreground shadow-sm hover:bg-brand/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
+                  className="size-10 rounded-full bg-brand text-brand-foreground shadow-sm hover:bg-brand/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 active:scale-90 transition-transform"
                 >
                   {isLoading ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
                 </Button>

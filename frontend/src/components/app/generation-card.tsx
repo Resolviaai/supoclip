@@ -32,7 +32,7 @@ export function GenerationCard({ generation, selected, onToggle, selectionDisabl
 
   return (
     <div className={cn("group relative", className)}>
-      <Link href={`/tasks/${generation.id}`} className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+      <Link href={`/tasks/${generation.id}`} className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] transition-transform duration-150">
         <ClipCover
           src={coverClipUrl(generation)}
           className={cn(

@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, Bot, ChartColumn, CornerDownLeft, Film, ListChecks, ListOrdered, LogOut, Play, Plus, Search, Settings, Share2, Shield, Sparkles, Target,
+  ArrowRight, Bot, ChartColumn, CornerDownLeft, CreditCard, Film, ListChecks, ListOrdered, LogOut, Play, Plus, Search, Settings, Share2, Shield, Sparkles, Target,
 } from "lucide-react";
 import { toast } from "sonner";
 import { signOut, useSession } from "@/lib/auth-client";
@@ -22,6 +22,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useAppTheme } from "@/components/theme-provider";
 import { availableWorkflows, useWorkflowsInfo } from "@/components/workflow-picker";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
@@ -146,33 +147,65 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
         </div>
       </aside> : null}
 
-      <div className={cn(user && "flex min-w-0 flex-1 flex-col", user && !immersive && "pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0")}>
-        {user && !immersive ? <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-background/80 px-4 backdrop-blur md:hidden">
-          <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight">
-            <Image src="/logo.png" alt="" width={22} height={22} className="size-[22px] dark:invert" />SupoClip
-          </Link>
-          <div className="flex items-center gap-1">
-            <Announcements key={user.id} userId={user.id} compact />
-            <ThemeToggle tooltipSide="bottom" className="rounded-lg p-2 hover:bg-accent [&_svg]:size-5" />
-            <button type="button" onClick={() => setPaletteOpen(true)} aria-label={t("search.generations")} className="rounded-lg p-2 text-muted-foreground hover:bg-accent">
-              <Search className="size-5" />
-            </button>
-          </div>
-        </header> : null}
+      <div className={cn(user && "flex min-w-0 flex-1 flex-col", user && !immersive && "pb-[calc(4.75rem+env(safe-area-inset-bottom))] md:pb-0")}>
+        {user && !immersive ? (
+          <header className="sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-end border-b border-border/40 bg-background/85 px-4 pb-2 pt-[env(safe-area-inset-top)] backdrop-blur-2xl md:hidden">
+            <div className="flex w-full items-center justify-between">
+              <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight active:scale-95 transition-transform">
+                <Image src="/logo.png" alt="" width={22} height={22} className="size-[22px] dark:invert" priority />
+                <span>SupoClip</span>
+              </Link>
+              <div className="flex items-center gap-1">
+                <Announcements key={user.id} userId={user.id} compact />
+                <ThemeToggle tooltipSide="bottom" className="flex size-10 items-center justify-center rounded-lg hover:bg-accent [&_svg]:size-5 active:scale-90 transition-transform" />
+                <button
+                  type="button"
+                  onClick={() => setPaletteOpen(true)}
+                  aria-label={t("search.generations")}
+                  className="flex size-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent active:scale-90 transition-transform"
+                >
+                  <Search className="size-5" />
+                </button>
+                <MobileUserMenu user={user} billing={billing} />
+              </div>
+            </div>
+          </header>
+        ) : null}
         {children}
       </div>
 
-      {user && !immersive ? <nav aria-label={t("search.mobileNav")} style={{ gridTemplateColumns: `repeat(${mobileNav.length}, minmax(0, 1fr))` }} className="fixed inset-x-0 bottom-0 z-40 grid border-t bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        {mobileNav.map((item) => {
-          const active = item.match(pathname);
-          return (
-            <Link key={item.href} href={item.href} data-tour={`nav-${item.labelKey}`} aria-current={active ? "page" : undefined}
-              className={cn("flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium", active ? "text-foreground" : "text-muted-foreground")}>
-              <item.icon className={cn("size-5", active && "text-brand")} />{item.label}
-            </Link>
-          );
-        })}
-      </nav> : null}
+      {user && !immersive ? (
+        <nav
+          aria-label={t("search.mobileNav")}
+          className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around border-t border-border/40 bg-background/85 px-2 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur-2xl shadow-[0_-4px_24px_rgba(0,0,0,0.06)] md:hidden"
+        >
+          {mobileNav.map((item) => {
+            const active = item.match(pathname);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                data-tour={`nav-${item.labelKey}`}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "group relative flex min-h-12 min-w-[3.5rem] flex-1 flex-col items-center justify-center gap-0.5 rounded-xl py-1 text-[11px] font-medium transition-all active:scale-90 select-none",
+                  active ? "text-foreground font-semibold" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex items-center justify-center rounded-full px-3 py-1 transition-all duration-200",
+                    active ? "bg-foreground/10 text-foreground ring-1 ring-foreground/15 shadow-xs" : "group-hover:bg-accent/50",
+                  )}
+                >
+                  <item.icon className={cn("size-5 transition-transform duration-200", active ? "scale-105 text-brand" : "scale-100")} />
+                </span>
+                <span className="leading-none">{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+      ) : null}
 
       {user ? <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} /> : null}
       <FeatureTourHost
@@ -283,6 +316,92 @@ function UserRow({ compact, name, email }: { compact: boolean; name?: string | n
   );
 }
 
+function MobileUserMenu({
+  user,
+  billing,
+}: {
+  user: { name?: string | null; email?: string | null; is_admin?: boolean };
+  billing?: ReturnType<typeof useBillingSummary>[0];
+}) {
+  const t = useTranslations("shell");
+  const tCommon = useTranslations("common");
+  const [signingOut, setSigningOut] = useState(false);
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await signOut();
+      resetAnalytics();
+      window.location.assign("/sign-in");
+    } catch {
+      toast.error(t("user.signOutError"));
+      setSigningOut(false);
+    }
+  };
+
+  const limit = billing?.minute_limit ?? null;
+  const used = billing?.usage_minutes ?? 0;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={user.name || t("user.creator")}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-amber-400 text-xs font-semibold text-white shadow-xs transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {initials(user.name, user.email)}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64 p-2 shadow-2xl rounded-2xl border-border/60">
+        <div className="px-2.5 py-2 border-b border-border/40 mb-1">
+          <p className="font-semibold text-sm truncate">{user.name || t("user.creator")}</p>
+          <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+          {billing?.monetization_enabled && (
+            <div className="mt-2 flex items-center justify-between rounded-lg bg-muted/50 px-2 py-1 text-xs">
+              <span className="font-medium text-foreground">
+                {tCommon(`plans.${billingPlanMessageKey(billing.plan)}`)}
+              </span>
+              <span className="text-muted-foreground tabular-nums">
+                {limit ? t("usage.minutesOf", { used, limit }) : t("usage.minutes", { used })}
+              </span>
+            </div>
+          )}
+        </div>
+        <DropdownMenuItem asChild>
+          <Link href="/settings#plan" className="cursor-pointer">
+            <CreditCard className="size-4" />
+            <span>{t("nav.settings")}</span>
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/settings/api-keys" className="cursor-pointer">
+            <Bot className="size-4" />
+            <span>{t("nav.agents")}</span>
+          </Link>
+        </DropdownMenuItem>
+        {user.is_admin && (
+          <DropdownMenuItem asChild>
+            <Link href="/admin" className="cursor-pointer">
+              <Shield className="size-4" />
+              <span>{t("nav.admin")}</span>
+            </Link>
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={signingOut}
+          onSelect={() => void handleSignOut()}
+          className="cursor-pointer"
+        >
+          <LogOut className="size-4" />
+          <span>{signingOut ? t("user.signingOut") : t("user.signOut")}</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 type PaletteEntry = { id: string; label: string; hint?: string; href: string; icon: typeof Film; generation?: GenerationSummary };
 
 // "New series" and friends open the create screen with that workflow picked.
@@ -348,7 +467,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="top-[18%] max-w-xl translate-y-0 gap-0 overflow-hidden p-0">
+      <DialogContent showCloseButton={false} className="top-[8%] sm:top-[18%] max-w-xl translate-y-0 gap-0 overflow-hidden p-0">
         <DialogTitle className="sr-only">{t("search.dialog")}</DialogTitle>
         <div className="flex items-center gap-3 border-b px-4">
           <Search className="size-4 text-muted-foreground" />
@@ -363,11 +482,11 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
             }}
             placeholder={t("search.placeholder")}
             aria-label={t("search.inputLabel")}
-            className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="h-12 flex-1 bg-transparent text-base sm:text-sm outline-none placeholder:text-muted-foreground"
           />
-          <Kbd>esc</Kbd>
+          <Kbd className="hidden sm:inline-flex">esc</Kbd>
         </div>
-        <div ref={listRef} className="max-h-80 overflow-y-auto p-1.5" role="listbox">
+        <div ref={listRef} className="max-h-[60dvh] sm:max-h-80 overflow-y-auto p-1.5 smooth-scroll" role="listbox">
           {entries.length === 0 && <p className="px-3 py-8 text-center text-sm text-muted-foreground">{t("search.empty", { query })}</p>}
           {entries.map((entry, index) => (
             <button
@@ -378,7 +497,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
               data-index={index}
               onMouseMove={() => setActive(index)}
               onClick={() => go(entry)}
-              className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm", index === active && "bg-accent")}
+              className={cn("flex min-h-11 sm:min-h-0 w-full items-center gap-3 rounded-lg px-3 py-2.5 sm:py-2 text-left text-sm active:scale-[0.99] transition-transform", index === active && "bg-accent")}
             >
               <entry.icon className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{entry.label}</span>

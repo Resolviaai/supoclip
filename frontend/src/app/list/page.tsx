@@ -383,7 +383,7 @@ export default function ListPage() {
       </div>
 
       {!isLoading && !error && tasks.length > 0 && (
-        <div className="scrollbar-none -mx-4 mt-6 flex items-center gap-1.5 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <div className="no-scrollbar -mx-4 mt-6 flex items-center gap-1.5 overflow-x-auto px-4 sm:mx-0 sm:px-0 smooth-scroll">
           <div className="flex shrink-0 items-center gap-1.5" role="tablist" aria-label={t("filterLabel")}>
             {filters.map((item) => (
               <button
@@ -393,8 +393,8 @@ export default function ListPage() {
                 aria-selected={filter === item.id}
                 onClick={() => setFilter(item.id)}
                 className={cn(
-                  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
-                  filter === item.id ? "border-foreground bg-foreground text-background" : "bg-background text-muted-foreground hover:text-foreground",
+                  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-all active:scale-95",
+                  filter === item.id ? "border-foreground bg-foreground text-background shadow-xs" : "bg-background text-muted-foreground hover:text-foreground",
                 )}
               >
                 {item.label}
@@ -411,7 +411,7 @@ export default function ListPage() {
                 aria-selected={sort === value}
                 onClick={() => setSort(value)}
                 className={cn(
-                  "h-7 rounded-md px-3 text-xs font-medium transition-colors",
+                  "h-7 rounded-md px-3 text-xs font-medium transition-all active:scale-95",
                   sort === value ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground",
                 )}
               >

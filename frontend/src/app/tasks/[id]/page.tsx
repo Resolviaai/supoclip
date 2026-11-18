@@ -856,9 +856,9 @@ export default function TaskPage() {
   );
 
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-8 md:py-8">
-      <Link href="/list" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-3.5" />{t("back")}
+    <main className="mx-auto w-full max-w-7xl px-3 py-4 sm:px-8 sm:py-6 md:py-8">
+      <Link href="/list" className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground active:scale-95 transition-all">
+        <ArrowLeft className="size-4" />{t("back")}
       </Link>
 
       {task && (
@@ -1093,7 +1093,7 @@ export default function TaskPage() {
                 <div className="inline-flex rounded-lg border bg-background p-0.5" role="tablist" aria-label={t("sortLabel")}>
                   {(["score", "timeline"] as const).map((value) => (
                     <button key={value} type="button" role="tab" aria-selected={sortBy === value} onClick={() => setSortBy(value)}
-                      className={cn("h-7 rounded-md px-3 text-xs font-medium transition-colors", sortBy === value ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
+                      className={cn("h-7 rounded-md px-3 text-xs font-medium transition-all active:scale-95", sortBy === value ? "bg-foreground text-background shadow-xs" : "text-muted-foreground hover:text-foreground")}>
                       {t(`sort.${value}`)}
                     </button>
                   ))}
@@ -1104,7 +1104,7 @@ export default function TaskPage() {
                 {formatSelect}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 sm:gap-x-4 sm:gap-y-7 lg:grid-cols-4 xl:grid-cols-5">
               {sortedClips.map(renderTile)}
             </div>
           </>

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   Check, ChevronLeft, ChevronRight, Download, Flame, Loader2, MessageSquare,
-  Play, Scissors, Share2, Star, Trash2, TrendingUp,
+  Play, Scissors, Share2, Star, Trash2, TrendingUp, X,
 } from "lucide-react";
 import { ClipCover, ScoreRing } from "@/components/app/clip-cover";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
@@ -112,7 +112,7 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
         type="button"
         onClick={onOpen}
         aria-label={t("preview", { title })}
-        className="block w-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="block w-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] transition-transform duration-150"
       >
         <ClipCover
           src={getClipUrl(clip.video_url, clip.filename)}
@@ -152,17 +152,17 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
         )}
         <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">{clip.start_time} – {clip.end_time}</p>
         <div className="mt-2 flex items-center gap-1">
-          <Button size="sm" variant="outline" className="h-7 flex-1 px-2 text-xs" onClick={onDownload} disabled={busy} aria-label={t("downloadNamed", { title })}>
+          <Button size="sm" variant="outline" className="h-8 flex-1 px-2 text-xs rounded-lg active:scale-95 transition-transform" onClick={onDownload} disabled={busy} aria-label={t("downloadNamed", { title })}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}<span className="hidden @min-[190px]:inline">{t("download")}</span>
           </Button>
           {editable && (
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" asChild>
+            <Button size="sm" variant="outline" className="h-8 px-2 text-xs rounded-lg active:scale-95 transition-transform" asChild>
               <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`}><Scissors className="size-3.5" />{t("edit")}</Link>
             </Button>
           )}
           {publishAction}
           {onDelete && (
-            <Button size="icon-sm" variant="ghost" className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={onDelete} aria-label={t("deleteClip")}>
+            <Button size="icon-sm" variant="ghost" className="size-8 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive active:scale-90 transition-transform" onClick={onDelete} aria-label={t("deleteClip")}>
               <Trash2 className="size-3.5" />
             </Button>
           )}
@@ -197,6 +197,7 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
   children?: React.ReactNode;
 }) {
   const t = useTranslations("task");
+  const tCommon = useTranslations("common");
   const moments = clip ? sourceMoments(clip) : null;
   const meta = clip?.workflow_meta;
   useEffect(() => {
@@ -212,29 +213,79 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
 
   return (
     <Dialog open={clip !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-h-[92dvh] max-w-5xl gap-0 overflow-hidden p-0 md:grid-cols-[auto_1fr]">
+      <DialogContent
+        showCloseButton={false}
+        className={cn(
+          "gap-0 overflow-hidden p-0 duration-200",
+          "max-md:fixed max-md:inset-0 max-md:top-0 max-md:left-0 max-md:h-dvh max-md:max-h-dvh max-md:w-full max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-none max-md:flex max-md:flex-col",
+          "md:max-h-[92dvh] md:max-w-5xl md:grid md:grid-cols-[auto_1fr] md:rounded-2xl md:border",
+        )}
+      >
         {clip && (
           <>
-            <div className="relative flex items-center justify-center bg-stone-950 p-3 md:p-4">
-              <DynamicVideoPlayer key={clip.id} src={getClipUrl(clip.video_url, clip.filename)} autoPlay className="h-[min(58dvh,560px)]! md:h-[min(80dvh,640px)]!" />
+            {/* Native Mobile Navigation Bar */}
+            <div className="flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-end justify-between border-b border-border/40 bg-background/90 px-3 pb-2 pt-[env(safe-area-inset-top)] backdrop-blur-xl md:hidden">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onClose}
+                className="size-9 rounded-full p-0 text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                aria-label={tCommon("close")}
+              >
+                <X className="size-5" />
+              </Button>
+              <span className="text-xs font-semibold tabular-nums text-foreground">
+                {t("position", { current: index + 1, total })}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => onNavigate(-1)}
+                  aria-label={t("previous")}
+                  className="size-9 rounded-full text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                >
+                  <ChevronLeft className="size-5" />
+                </Button>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => onNavigate(1)}
+                  aria-label={t("next")}
+                  className="size-9 rounded-full text-muted-foreground hover:text-foreground active:scale-90 transition-transform"
+                >
+                  <ChevronRight className="size-5" />
+                </Button>
+              </div>
             </div>
-            <div className="flex min-h-0 flex-col overflow-y-auto">
-              <div className="flex items-center justify-between gap-2 border-b px-5 py-3 pr-12 text-xs text-muted-foreground">
-                <span className="tabular-nums">{t("position", { current: index + 1, total })}</span>
+
+            <div className="relative flex shrink-0 items-center justify-center bg-stone-950 p-2 sm:p-3 md:p-4">
+              <DynamicVideoPlayer
+                key={clip.id}
+                src={getClipUrl(clip.video_url, clip.filename)}
+                autoPlay
+                className="h-[min(48dvh,420px)]! md:h-[min(80dvh,640px)]!"
+              />
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto smooth-scroll">
+              {/* Desktop Navigation / Header Bar */}
+              <div className="hidden md:flex items-center justify-between gap-2 border-b px-5 py-3 pr-4 text-xs text-muted-foreground">
+                <span className="tabular-nums font-medium">{t("position", { current: index + 1, total })}</span>
                 <div className="flex items-center gap-1">
                   <Button size="icon-sm" variant="ghost" onClick={() => onNavigate(-1)} aria-label={t("previous")}><ChevronLeft className="size-4" /></Button>
                   <Button size="icon-sm" variant="ghost" onClick={() => onNavigate(1)} aria-label={t("next")}><ChevronRight className="size-4" /></Button>
+                  <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label={tCommon("close")} className="ml-2 size-8 text-muted-foreground hover:text-foreground"><X className="size-4" /></Button>
                 </div>
               </div>
-              <div className="space-y-5 p-5">
+              <div className="space-y-4 p-4 md:space-y-5 md:p-5">
                 <div>
                   {isPart(clip) && (
                     <p className="mb-1 text-xs font-medium tabular-nums text-muted-foreground">
                       {meta?.part_count ? t("partOf", { n: clip.part_number, total: meta.part_count }) : t("partLabel", { n: clip.part_number })}
                     </p>
                   )}
-                  <DialogTitle className="font-display text-xl font-bold leading-tight">{clipTitle(clip, t)}</DialogTitle>
-                  <DialogDescription className="mt-1 tabular-nums">
+                  <DialogTitle className="font-display text-lg sm:text-xl font-bold leading-tight">{clipTitle(clip, t)}</DialogTitle>
+                  <DialogDescription className="mt-1 text-xs sm:text-sm tabular-nums">
                     {moments ? formatClipDuration(clip.duration) : <>{clip.start_time} – {clip.end_time} · {formatClipDuration(clip.duration)}</>}
                   </DialogDescription>
                 </div>
@@ -289,18 +340,33 @@ export function ClipFocus({ clip, taskId, index, total, busy, editable, onNaviga
                 {clip.text && <TranscriptPreview text={clip.text} clipTitle={clipTitle(clip, t)} />}
                 {children}
               </div>
-              <div className="mt-auto flex flex-wrap items-center gap-2 border-t bg-muted/30 px-5 py-3">
-                <Button size="sm" onClick={onDownload} disabled={busy}>
+              <div className="sticky bottom-0 z-10 mt-auto flex flex-wrap items-center gap-2 border-t bg-background/95 backdrop-blur-xl px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-5 md:py-3 md:bg-muted/30">
+                <Button
+                  size="sm"
+                  onClick={onDownload}
+                  disabled={busy}
+                  className="h-10 flex-1 rounded-xl text-xs sm:text-sm font-semibold active:scale-95 transition-transform md:h-8 md:flex-none md:rounded-lg"
+                >
                   {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}{t("download")}
                 </Button>
                 {editable && (
-                  <Button size="sm" variant="outline" asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    asChild
+                    className="h-10 rounded-xl text-xs sm:text-sm active:scale-95 transition-transform md:h-8 md:rounded-lg"
+                  >
                     <Link href={`/tasks/${taskId}/edit?clip=${clip.id}`}><Scissors className="size-4" />{t("openInEditor")}</Link>
                   </Button>
                 )}
                 {actions}
                 {onDelete && (
-                  <Button size="sm" variant="ghost" className="ml-auto text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={onDelete}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="ml-auto h-10 px-3 rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive active:scale-90 transition-transform md:h-8 md:rounded-lg"
+                    onClick={onDelete}
+                  >
                     <Trash2 className="size-4" />{t("delete")}
                   </Button>
                 )}

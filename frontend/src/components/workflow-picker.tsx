@@ -58,7 +58,13 @@ export function WorkflowPicker({ value, onChange, disabled, available, labelId }
   };
 
   return (
-    <div data-tour="workflow-picker" role="radiogroup" aria-labelledby={labelId} aria-disabled={disabled || undefined} className="-mx-4 flex rounded-2xl snap-x snap-mandatory scroll-px-4 gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0 sm:pb-0">
+    <div
+      data-tour="workflow-picker"
+      role="radiogroup"
+      aria-labelledby={labelId}
+      aria-disabled={disabled || undefined}
+      className="-mx-4 flex no-scrollbar snap-x snap-mandatory scroll-px-4 gap-2.5 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0 sm:pb-0"
+    >
       {WORKFLOWS.map((id) => {
         const selectable = available.has(id);
         const checked = value === id;
@@ -83,8 +89,8 @@ export function WorkflowPicker({ value, onChange, disabled, available, labelId }
               }
             }}
             className={cn(
-              "group/workflow flex w-40 shrink-0 snap-start flex-col rounded-xl border bg-background p-3 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 sm:w-auto",
-              checked && "border-foreground ring-1 ring-foreground",
+              "group/workflow flex w-40 shrink-0 snap-start flex-col rounded-xl border bg-background p-3 text-left transition-all hover:bg-accent active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 sm:w-auto",
+              checked && "border-foreground ring-1 ring-foreground bg-accent/40 shadow-xs",
             )}
           >
             <WorkflowGlyph id={id} />
