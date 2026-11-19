@@ -6,6 +6,8 @@ Add a line here when a pull request changes something a user can see. Use **New*
 
 ## 2026-11-19
 
+- **Under the hood:** Added Cloudflare R2 object storage integration and autonomous 24/7 cloud publishing runner via GitHub Actions, allowing scheduled social media posts to publish automatically even when the local workstation is closed or powered off, at zero operational cost. ([#456](https://github.com/FujiwaraChoki/supoclip/pull/456))
+- **New:** Multi-select clip batch social publishing: select multiple generated clips to publish or schedule across YouTube Shorts, Instagram Reels, Facebook, LinkedIn, and X in one unified studio view. Includes smart anti-bot staggered scheduling (auto-drip with natural human timing jitter), parallel AI caption generation, and granular per-clip platform overrides. ([#455](https://github.com/FujiwaraChoki/supoclip/pull/455))
 - **Fixed:** Video captions now accurately preserve standard English spelling for technical loanwords (such as Premiere Pro, PC, transitions, clients, and courses) and transcribe spoken Hindi into natural Roman Hinglish using LLM token normalization without mechanical phonetic corruptions. ([#454](https://github.com/FujiwaraChoki/supoclip/pull/454))
 - **Fixed:** Transcript analysis and clipping now automatically fail over across alternative Gemini models when an upstream provider experiences transient errors, preventing generations from failing. ([#450](https://github.com/FujiwaraChoki/supoclip/pull/450))
 - **Improved:** On-screen clip hooks and titles default to crisp English with clean Roman script for international social distribution, and series clips consistently use English part numbering. ([#451](https://github.com/FujiwaraChoki/supoclip/pull/451))

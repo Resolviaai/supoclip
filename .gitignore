@@ -35,3 +35,6 @@ auto_updater_status.json
 
 # Netlify local CLI state
 .netlify/
+
+scripts/accounts_vault.json
+
