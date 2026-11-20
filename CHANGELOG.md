@@ -4,6 +4,11 @@ What changed in SupoClip for people using the product. Newest dates are first.
 
 Add a line here when a pull request changes something a user can see. Use **New**, **Improved**, **Fixed**, or **Under the hood**, describe the change in plain language, and link the pull request. Skip internal-only work, or fold it into one **Under the hood** line. Do not include customer names, email addresses, user IDs, or anything else private.
 
+## 2026-11-20
+
+- **Fixed:** Complete transcription coverage for long-form video: audio is now split into natural silence-bounded segments and automatically monitored for speech dropouts (>35-second gaps) or low word density (<30 words per minute), seamlessly falling back to high-resilience Flash-Lite models so full-length speeches reliably produce complete transcripts and multiple viral clips. ([#457](https://github.com/FujiwaraChoki/supoclip/pull/457))
+- **Fixed:** Brand and product names (such as SupoClip) are explicitly protected during LLM transliteration, ensuring consistent, accurate English spelling across captions and hook titles. ([#457](https://github.com/FujiwaraChoki/supoclip/pull/457))
+
 ## 2026-11-19
 
 - **Under the hood:** Added Cloudflare R2 object storage integration and autonomous 24/7 cloud publishing runner via GitHub Actions, allowing scheduled social media posts to publish automatically even when the local workstation is closed or powered off, at zero operational cost. ([#456](https://github.com/FujiwaraChoki/supoclip/pull/456))

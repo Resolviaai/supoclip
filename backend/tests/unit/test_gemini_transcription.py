@@ -156,14 +156,37 @@ def test_devanagari_transliteration():
     assert "kaise" in roman and "shuru" in roman and "video" in roman
 
 
-def test_normalize_tokens_with_llm_preserves_length():
+def test_normalize_tokens_with_llm_preserves_length(monkeypatch):
     tokens = ["प्रीमियर", "प्रो", "में", "कट", "लगाना", "सीखो"]
-    normalized = normalize_tokens_with_llm(tokens)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": json.dumps(["Premiere", "Pro", "mein", "cut", "lagana", "seekho"])}
+                    ]
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr("requests.post", lambda *a, **kw: mock_resp)
+
+    normalized = normalize_tokens_with_llm(tokens, api_key="test-key")
     assert len(normalized) == len(tokens)
     assert not any(has_devanagari(t) for t in normalized)
     # Check that standard English spelling is produced
     assert "Premiere" in normalized or "premiere" in [t.lower() for t in normalized]
     assert "Pro" in normalized or "pro" in [t.lower() for t in normalized]
+
+
+def test_normalize_tokens_fallback_without_api_key(monkeypatch):
+    tokens = ["प्रीमियर", "प्रो", "में", "कट", "लगाना", "सीखो"]
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    normalized = normalize_tokens_with_llm(tokens, api_key="")
+    assert len(normalized) == len(tokens)
+    assert not any(has_devanagari(t) for t in normalized)
 
 
 def test_parse_gemini_transcribe_rechunks_multi_speaker_giant_utterance():
@@ -233,7 +256,7 @@ def test_get_transcript_with_gemini_skips_truncated_fallback_for_full_transcript
 
     calls = []
 
-    def fake_fallback(file_uri, api_key, model_name, language=None):
+    def fake_fallback(file_uri, api_key, model_name, language=None, *args, **kwargs):
         calls.append(model_name)
         if len(calls) == 1:
             # Truncated at 26s of 410s video with MAX_TOKENS
@@ -249,7 +272,9 @@ def test_get_transcript_with_gemini_skips_truncated_fallback_for_full_transcript
                     }
                 ]
             }
-        # Full transcript up to 405s
+        # Full transcript up to 405s with realistic word count
+        first_half = "First half of the video covering everything in detail. " * 25
+        second_half = "Second half of the video finishing all thoughts and closing out. " * 25
         return {
             "candidates": [
                 {
@@ -258,8 +283,8 @@ def test_get_transcript_with_gemini_skips_truncated_fallback_for_full_transcript
                         "parts": [
                             {
                                 "text": json.dumps([
-                                    {"start": 2.0, "end": 180.0, "speaker": "Speaker 1", "text": "First half of the video"},
-                                    {"start": 185.0, "end": 405.0, "speaker": "Speaker 1", "text": "Second half of the video"},
+                                    {"start": 2.0, "end": 180.0, "speaker": "Speaker 1", "text": first_half.strip()},
+                                    {"start": 185.0, "end": 405.0, "speaker": "Speaker 1", "text": second_half.strip()},
                                 ])
                             }
                         ]
@@ -279,6 +304,36 @@ def test_get_transcript_with_gemini_skips_truncated_fallback_for_full_transcript
     assert "Speaker 1:" in formatted
     cached = json.loads(video_path.with_suffix(".transcript_cache.json").read_text(encoding="utf-8"))
     assert cached["words"][-1]["end"] >= 400_000
+
+
+def test_is_truncated_transcript_detects_gap_and_low_wpm():
+    from src.media.gemini_transcription import _is_truncated_transcript
+
+    # Case 1: 380s gap in speech (like the previous zYR04cv5LGQ bug)
+    gapped_transcript = {
+        "words": [
+            {"text": "Hello", "start": 1000, "end": 2000},
+            {"text": "World", "start": 2500, "end": 5000},
+            {"text": "Bye", "start": 386000, "end": 387000},  # 381s gap!
+        ]
+    }
+    assert _is_truncated_transcript(gapped_transcript, video_duration_seconds=400.0) is True
+
+    # Case 2: Low word density (starved words: 20 words for 300s = 4 WPM)
+    starved_words = [
+        {"text": f"word{i}", "start": i * 10000, "end": i * 10000 + 500}
+        for i in range(20)
+    ]
+    starved_transcript = {"words": starved_words}
+    assert _is_truncated_transcript(starved_transcript, video_duration_seconds=300.0) is True
+
+    # Case 3: Normal conversational transcript (120 WPM, no gaps > 35s)
+    normal_words = [
+        {"text": f"word{i}", "start": i * 500, "end": i * 500 + 400}
+        for i in range(200)
+    ]
+    normal_transcript = {"words": normal_words}
+    assert _is_truncated_transcript(normal_transcript, video_duration_seconds=100.0) is False
 
 
 if __name__ == "__main__":

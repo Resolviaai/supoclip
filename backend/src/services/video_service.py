@@ -1172,9 +1172,13 @@ class VideoService:
             try:
                 cached_analysis = json.loads(cached_analysis_json)
                 segments = cached_analysis.get("most_relevant_segments", [])
-                if not segments and not (checkpoint.get("candidates") or checkpoint.get("segments")):
+                is_fallback = any(
+                    (isinstance(s, dict) and (s.get("hook_type") == "fallback" or "fallback" in str(s.get("reasoning", "")).lower()))
+                    for s in segments
+                )
+                if is_fallback or (not segments and not (checkpoint.get("candidates") or checkpoint.get("segments"))):
                     logger.info(
-                        "Ignoring cached transcript analysis with no clip segments"
+                        "Ignoring cached transcript analysis with fallback or empty clip segments"
                     )
                 else:
 
@@ -1229,7 +1233,13 @@ class VideoService:
 
         raw_segments = relevant_parts.most_relevant_segments
         prepared_segments = checkpoint.get("segments") or checkpoint.get("candidates")
-        final_plan = bool(checkpoint.get("segments"))
+        if prepared_segments and any(
+            isinstance(s, dict) and (s.get("hook_type") == "fallback" or "fallback" in str(s.get("reasoning", "")).lower())
+            for s in prepared_segments
+        ):
+            logger.info("Ignoring cached fallback segments/candidates from checkpoint")
+            prepared_segments = None
+        final_plan = bool(checkpoint.get("segments")) and prepared_segments is not None
         segments_json: List[Dict[str, Any]] = list(prepared_segments or [])
         transcript_data = load_cached_transcript_data(video_path)
         for segment in ([] if prepared_segments else raw_segments):

@@ -451,17 +451,6 @@ def _normalize_token_chunk_with_gemini(
     if not chunk_tokens:
         return []
 
-    # If no Devanagari in this chunk and no obvious phonetic mangling, return cleaned spelling
-    has_dev = any(has_devanagari(t) for t in chunk_tokens)
-    if not has_dev:
-        # Check if there are recognizable archaic phonetic double-vowel corruptions
-        needs_norm = any(
-            re.search(r"(?:[a-z]+(?:aa|ee|oo|ph|bh|dh|jh)[a-z]+|traip|kors|litaralee|dolars|korsej|jast|kats|peesee|preemiyar|traanjishan|klaaints|konphidens|imejin|svaaip|phyoochar|epharts|iyaralee|intarest|rait\s+res)", t.lower())
-            for t in chunk_tokens
-        )
-        if not needs_norm:
-            return [clean_hinglish_spelling(t) for t in chunk_tokens]
-
     prompt = (
         f"You are an expert bilingual speech-to-text editor and transliterator for Indian video creators speaking Hinglish (Hindi + English).\n"
         f"Given a list of {len(chunk_tokens)} spoken tokens from a transcript:\n"
@@ -470,7 +459,8 @@ def _normalize_token_chunk_with_gemini(
         f"'imagine', 'mall', 'credit', 'card', 'swipe', 'future', 'loan', 'salary', 'promotion', 'courses', 'buy', 'dollars', 'literally', 'just', 'practice', 'but').\n"
         f"2. Hindi words: If a token is a Hindi word (whether Devanagari or Romanized), transliterate it into clean, natural conversational Roman Hinglish "
         f"(e.g. 'to', 'hamara', 'pehla', 'hai', 'aaj', 'bhi', 'yaani', 'mein', 'logon', 'ko', 'dekha', 'seekhne', 'ke', 'liye', 'karna', 'rahe', 'hain', 'matlab', 'hazar', 'un', 'kuchh', 'maarna', 'chahiye', 'dhundhne', 'nahi', 'achha').\n"
-        f"3. Numbers and punctuation: Preserve numbers, dollar amounts, and punctuation marks exactly.\n"
+        f"3. Brand names: 'SupoClip' is a brand name and must ALWAYS remain 'SupoClip'. Never change 'SupoClip' to 'SubClip'.\n"
+        f"4. Numbers and punctuation: Preserve numbers, dollar amounts, and punctuation marks exactly.\n"
         f"CRITICAL REQUIREMENT: You MUST return a JSON array of strings containing EXACTLY {len(chunk_tokens)} items, matching each input token 1-to-1 in order. "
         f"Do not merge, split, omit, or add tokens. Output ONLY the JSON array.\n\n"
         f"Input tokens:\n{json.dumps(chunk_tokens, ensure_ascii=False)}"
@@ -496,10 +486,16 @@ def _normalize_token_chunk_with_gemini(
                 if text:
                     parsed = json.loads(text)
                     if isinstance(parsed, list) and len(parsed) == len(chunk_tokens):
-                        return [
-                            phonetic_devanagari_to_roman(str(t)) if has_devanagari(str(t)) else str(t)
-                            for t in parsed
-                        ]
+                        output_tokens: List[str] = []
+                        for orig, norm in zip(chunk_tokens, parsed):
+                            clean_orig = re.sub(r"[^\w]", "", orig).lower()
+                            if clean_orig == "supoclip":
+                                output_tokens.append(orig)
+                            elif has_devanagari(str(norm)):
+                                output_tokens.append(phonetic_devanagari_to_roman(str(norm)))
+                            else:
+                                output_tokens.append(str(norm))
+                        return output_tokens
                     logger.warning(
                         "Transliteration model %s returned list of length %d, expected %d",
                         model_name,
@@ -535,15 +531,6 @@ def normalize_tokens_with_llm(
     """
     if not tokens:
         return []
-
-    # If no Devanagari and not forced, check whether any phonetic corruption markers exist
-    if not force_normalize and not any(has_devanagari(t) for t in tokens):
-        has_corruptions = any(
-            re.search(r"(?:traip|kors|litaralee|dolars|korsej|jast|kats|peesee|preemiyar|traanjishan|klaaints|konphidens|imejin|svaaip|phyoochar|epharts|iyaralee|intarest|rait\s+res)", t.lower())
-            for t in tokens
-        )
-        if not has_corruptions:
-            return [clean_hinglish_spelling(t) for t in tokens]
 
     eff_key = api_key
     if not eff_key:

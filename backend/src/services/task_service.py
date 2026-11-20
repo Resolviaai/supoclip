@@ -572,6 +572,8 @@ class TaskService(ClipEditingMixin):
             cached_analysis_json = (
                 analysis_entry.get("analysis_json") if analysis_entry else None
             )
+            if cached_analysis_json and ("fallback" in cached_analysis_json.lower()):
+                cached_analysis_json = None
             # Performance loop: feed this creator's real audience data back into
             # clip selection. Personalized analyses bypass the shared analysis
             # cache so one creator's history never shapes another's clips.

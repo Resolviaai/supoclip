@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -239,21 +240,32 @@ def _generate_with_gemini_transcribe(
 
 
 def _generate_with_gemini_flash_fallback(
-    file_uri: str, api_key: str, model_name: str = "gemini-3.1-flash-lite", language: Optional[str] = None
+    file_uri: str,
+    api_key: str,
+    model_name: str = "gemini-3.1-flash-lite",
+    language: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Fallback: Structured timestamped transcription using Gemini Flash."""
     endpoint = f"{GEMINI_API_BASE}/v1beta/models/{model_name}:generateContent?key={api_key}"
 
     lang_hint = f" The audio language is {language}." if language and language != "auto" else ""
+    dur_hint = (
+        f" The audio clip is exactly {duration_seconds:.1f} seconds long (from 0.0s to {duration_seconds:.1f}s). "
+        f"All segment start and end timestamps MUST be precisely within 0.0 and {duration_seconds:.1f}."
+        if duration_seconds and duration_seconds > 0
+        else ""
+    )
     prompt = (
-        f"You are an expert audio transcription engine for social media video clipping.{lang_hint} "
+        f"You are an expert audio transcription engine for social media video clipping.{lang_hint}{dur_hint} "
         "Transcribe the spoken audio in natural, readable conversational Roman Hinglish (using Latin / English script). "
         "Do NOT use Devanagari script. "
         "CRITICAL SPELLING RULES: "
         "1. All English words spoken (e.g., video, confession, student, consistency, challenge, break, college, drop out, AI, projects, rule, exam, etc.) "
         "MUST be spelled with standard, correct English spelling. Never spell 'video' as 'veediyo' or 'college' as 'kolej'. "
         "2. Hindi words must be written in standard conversational Roman script (e.g., 'main', 'nahi', 'karenge', 'socha', 'kya', 'hai', 'bana raha hoon'). "
-        "Provide exact timestamps and speaker labels in JSON array format: "
+        f"Provide exact timestamps in seconds{' strictly bounded between 0.0 and ' + f'{duration_seconds:.1f}' if duration_seconds and duration_seconds > 0 else ''} "
+        "and speaker labels in JSON array format: "
         '[{"start": 0.0, "end": 2.5, "speaker": "Speaker 1", "text": "clean Roman Hinglish sentence here"}] '
         "Return ONLY the valid JSON array."
     )
@@ -423,18 +435,50 @@ def _is_truncated_transcript(
     video_duration_seconds: float,
     finish_reason: str = "",
 ) -> bool:
-    """Detect transcripts truncated early or starved of words (e.g. 12 words for a 427s video)."""
-    if video_duration_seconds < 60.0:
+    """Detect transcripts truncated early, starved of words, or containing large internal speech dropouts."""
+    if video_duration_seconds < 45.0:
         return False
     words = transcript_data.get("words") or []
-    # Real speech in video averages 100-160 words per minute. Less than 20 wpm is clearly starved or hallucinated.
-    min_expected_words = max(20, int((video_duration_seconds / 60.0) * 20))
-    if len(words) < min_expected_words:
-        return True
     coverage = _transcript_coverage_seconds(transcript_data)
-    if finish_reason == "MAX_TOKENS" and coverage < video_duration_seconds * 0.8:
+
+    # 1. Hit max tokens before 85% coverage
+    if finish_reason == "MAX_TOKENS" and coverage < video_duration_seconds * 0.85:
         return True
-    return coverage < video_duration_seconds * 0.35
+
+    # 2. Coverage stopped well short of video duration (less than 70%)
+    if coverage < video_duration_seconds * 0.70:
+        return True
+
+    # 3. Word starvation: conversational speech is typically 120-160 WPM. Anything < 30 WPM on a video >= 60s
+    # indicates massive dropped speech (e.g. 195 words on a 603s video = 19.4 WPM).
+    if video_duration_seconds >= 60.0:
+        wpm = len(words) / (video_duration_seconds / 60.0)
+        if wpm < 30.0:
+            logger.warning(
+                "Transcript is word-starved: %d words over %.1fs (%.1f WPM < 30.0 min threshold)",
+                len(words),
+                video_duration_seconds,
+                wpm,
+            )
+            return True
+
+    # 4. Large internal speech gap: conversational videos do not have 35+ seconds of complete silence.
+    # A gap > 35s between consecutive words indicates speech dropout.
+    if words and len(words) >= 2 and video_duration_seconds >= 60.0:
+        for i in range(len(words) - 1):
+            gap_ms = words[i + 1].get("start", 0) - words[i].get("end", 0)
+            if gap_ms > 35_000:
+                logger.warning(
+                    "Transcript contains a large internal speech gap of %.1fs between word '%s' (%.1fs) and '%s' (%.1fs)",
+                    gap_ms / 1000.0,
+                    words[i].get("text", ""),
+                    words[i].get("end", 0) / 1000.0,
+                    words[i + 1].get("text", ""),
+                    words[i + 1].get("start", 0) / 1000.0,
+                )
+                return True
+
+    return False
 
 
 def _parse_gemini_transcribe_response(data: Dict[str, Any], api_key: Optional[str] = None) -> Dict[str, Any]:
@@ -494,15 +538,11 @@ def _parse_gemini_transcribe_response(data: Dict[str, Any], api_key: Optional[st
     full_text = " ".join(text_pieces).strip() or " ".join(w["text"] for w in words).strip()
 
     # Clean and normalize all transcript text to readable Roman Hinglish (zero Devanagari, standard English spelling)
-    if words and any(has_devanagari(w.get("text", "") or w.get("word", "")) for w in words):
+    if words:
         raw_tokens = [str(w.get("text", "") or w.get("word", "")) for w in words]
-        normalized_tokens = normalize_tokens_with_llm(raw_tokens, api_key=api_key)
+        normalized_tokens = normalize_tokens_with_llm(raw_tokens, api_key=api_key, force_normalize=True)
         for w, norm in zip(words, normalized_tokens):
             w["text"] = norm
-    else:
-        for w in words:
-            raw_text = str(w.get("text", "") or w.get("word", ""))
-            w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
 
     for u in utterances:
         if u.get("words"):
@@ -627,15 +667,11 @@ def _parse_gemini_fallback_response(data: Dict[str, Any], api_key: Optional[str]
 
     fallback_full_text = " ".join(full_text_pieces)
     # Clean and normalize all fallback transcript text to readable Roman Hinglish (zero Devanagari, standard English spelling)
-    if words and any(has_devanagari(w.get("text", "") or w.get("word", "")) for w in words):
+    if words:
         raw_tokens = [str(w.get("text", "") or w.get("word", "")) for w in words]
-        normalized_tokens = normalize_tokens_with_llm(raw_tokens, api_key=api_key)
+        normalized_tokens = normalize_tokens_with_llm(raw_tokens, api_key=api_key, force_normalize=True)
         for w, norm in zip(words, normalized_tokens):
             w["text"] = norm
-    else:
-        for w in words:
-            raw_text = str(w.get("text", "") or w.get("word", ""))
-            w["text"] = phonetic_devanagari_to_roman(raw_text) if has_devanagari(raw_text) else clean_hinglish_spelling(raw_text)
 
     for u in utterances:
         if u.get("words"):
@@ -651,6 +687,188 @@ def _parse_gemini_fallback_response(data: Dict[str, Any], api_key: Optional[str]
         "words": words,
         "utterances": utterances,
         "text": fallback_full_text,
+        "language_code": None,
+    }
+
+
+def _detect_silence_split_points(
+    audio_path: Path,
+    duration: float,
+    target_chunk_sec: float = 80.0,
+    min_chunk_sec: float = 60.0,
+) -> List[float]:
+    """Detect natural speech pauses using ffmpeg silencedetect to split long audio safely."""
+    cmd = [
+        "ffmpeg",
+        "-i",
+        str(audio_path),
+        "-af",
+        "silencedetect=noise=-28dB:d=0.25",
+        "-f",
+        "null",
+        "-",
+    ]
+    silence_midpoints = []
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        current_start = None
+        for line in res.stderr.splitlines():
+            if "silence_start:" in line:
+                m = re.search(r"silence_start:\s*([0-9.]+)", line)
+                if m:
+                    current_start = float(m.group(1))
+            elif "silence_end:" in line and current_start is not None:
+                m = re.search(r"silence_end:\s*([0-9.]+)", line)
+                if m:
+                    end = float(m.group(1))
+                    silence_midpoints.append((current_start + end) / 2.0)
+                    current_start = None
+    except Exception as e:
+        logger.warning("silencedetect failed or timed out: %s", e)
+
+    splits: List[float] = []
+    last_split = 0.0
+    while last_split + target_chunk_sec < duration - (min_chunk_sec / 2):
+        target = last_split + target_chunk_sec
+        candidates = [s for s in silence_midpoints if (last_split + min_chunk_sec) <= s <= (target + 25.0)]
+        best = min(candidates, key=lambda s: abs(s - target)) if candidates else target
+        splits.append(round(best, 2))
+        last_split = best
+
+    return splits
+
+
+def _transcribe_audio_in_chunks(
+    audio_path: Path,
+    video_duration: float,
+    api_key: str,
+    language: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Transcribe long audio (>90s) in silence-split chunks to ensure 100% speech coverage."""
+    splits = _detect_silence_split_points(audio_path, video_duration)
+    intervals: List[Tuple[float, float]] = []
+    prev = 0.0
+    for sp in splits:
+        intervals.append((prev, sp))
+        prev = sp
+    intervals.append((prev, video_duration))
+
+    logger.info("Transcribing audio in %d silence-split chunks across %.1fs", len(intervals), video_duration)
+    all_words: List[Dict[str, Any]] = []
+    all_utterances: List[Dict[str, Any]] = []
+
+    for idx, (start_sec, end_sec) in enumerate(intervals):
+        chunk_len = end_sec - start_sec
+        chunk_file = audio_path.parent / f"{audio_path.stem}_chunk_{idx}.mp3"
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(start_sec),
+            "-t", str(chunk_len),
+            "-i", str(audio_path),
+            "-ac", "1", "-ar", "16000", "-b:a", "64k",
+            str(chunk_file),
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=60)
+        except Exception as e:
+            logger.warning("Failed to extract audio chunk %d: %s", idx, e)
+            return None
+
+        chunk_fname, chunk_furi = None, None
+        try:
+            chunk_fname, chunk_furi = _upload_audio_file(chunk_file, api_key)
+            chunk_parsed: Optional[Dict[str, Any]] = None
+
+            # Step A: Try gemini-3.5-transcribe with 1 retry on 429/503
+            for attempt in range(2):
+                try:
+                    raw = _generate_with_gemini_transcribe(chunk_furi, api_key, language)
+                    parsed = _parse_gemini_transcribe_response(raw, api_key=api_key)
+                    c_words = parsed.get("words") or []
+                    c_wpm = len(c_words) / (chunk_len / 60.0) if chunk_len > 0 else 0
+                    has_gap = any(
+                        (c_words[i + 1]["start"] - c_words[i]["end"]) > 25000
+                        for i in range(len(c_words) - 1)
+                    ) if len(c_words) >= 2 else False
+
+                    # If chunk is starved or dropped speech, reject gemini-3.5-transcribe and fall back to flash-lite
+                    if c_wpm < 40.0 or has_gap or (chunk_len >= 45.0 and len(c_words) < 20):
+                        logger.warning(
+                            "Chunk %d (%.1fs - %.1fs) had low transcribe coverage (%d words, %.1f WPM, gap=%s); using flash-lite fallback",
+                            idx, start_sec, end_sec, len(c_words), c_wpm, has_gap
+                        )
+                        break
+                    chunk_parsed = parsed
+                    break
+                except Exception as err:
+                    if attempt == 0 and any(code in str(err) for code in ("503", "429")):
+                        time.sleep(3.0)
+                        continue
+                    logger.warning("Chunk %d gemini-3.5-transcribe failed: %s; falling back to flash-lite", idx, err)
+                    break
+
+            # Step B: If gemini-3.5-transcribe was starved or failed, use gemini-3.5-flash-lite on this chunk
+            if not chunk_parsed:
+                for fb_model in ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"):
+                    try:
+                        raw_fb = _generate_with_gemini_flash_fallback(
+                            chunk_furi, api_key, model_name=fb_model, language=language, duration_seconds=chunk_len
+                        )
+                        parsed_fb = _parse_gemini_fallback_response(raw_fb, api_key=api_key)
+                        if parsed_fb.get("words") or parsed_fb.get("utterances"):
+                            chunk_parsed = parsed_fb
+                            logger.info("Chunk %d transcribed by %s fallback: %d words", idx, fb_model, len(chunk_parsed.get("words", [])))
+                            break
+                    except Exception as fb_err:
+                        logger.warning("Chunk %d fallback %s failed: %s", idx, fb_model, fb_err)
+
+            if not chunk_parsed:
+                logger.error("Failed to transcribe chunk %d with all models", idx)
+                return None
+
+            # Offset timestamps to global video timeline
+            offset_ms = int(start_sec * 1000)
+            for w in chunk_parsed.get("words") or []:
+                w_copy = dict(w)
+                w_copy["start"] += offset_ms
+                w_copy["end"] += offset_ms
+                all_words.append(w_copy)
+
+            for u in chunk_parsed.get("utterances") or []:
+                u_copy = dict(u)
+                u_copy["start"] += offset_ms
+                u_copy["end"] += offset_ms
+                if u_copy.get("words"):
+                    shifted_words = []
+                    for sw in u_copy["words"]:
+                        sw_copy = dict(sw)
+                        sw_copy["start"] += offset_ms
+                        sw_copy["end"] += offset_ms
+                        shifted_words.append(sw_copy)
+                    u_copy["words"] = shifted_words
+                all_utterances.append(u_copy)
+
+        finally:
+            if chunk_fname:
+                _delete_audio_file(chunk_fname, api_key)
+            if chunk_file.exists():
+                try:
+                    chunk_file.unlink()
+                except OSError:
+                    pass
+            time.sleep(0.5)
+
+    if not all_words:
+        return None
+
+    all_utterances = _rechunk_long_utterances(all_utterances, all_words)
+    full_text = " ".join(w["text"] for w in all_words).strip()
+
+    return {
+        "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
+        "words": all_words,
+        "utterances": all_utterances,
+        "text": full_text,
         "language_code": None,
     }
 
@@ -728,7 +946,21 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
                 logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
                 break
 
-        # 2. Fallback: prefer non-thinking flash-lite models first so full-length JSON transcripts never truncate
+        # 2. For long audio (>90s), try silence-bounded chunking before monolithic fallbacks
+        if not transcript_data and video_duration > 90.0:
+            try:
+                chunked_result = _transcribe_audio_in_chunks(audio_path, video_duration, api_key, language)
+                if chunked_result and not _is_truncated_transcript(chunked_result, video_duration):
+                    transcript_data = chunked_result
+                    logger.info(
+                        "Chunked transcription succeeded: %d words, %d utterances",
+                        len(chunked_result["words"]),
+                        len(chunked_result["utterances"]),
+                    )
+            except Exception as chunk_err:
+                logger.warning("Chunked transcription failed (%s); trying monolithic fallback models", chunk_err)
+
+        # 3. Fallback: prefer non-thinking flash-lite models first so full-length JSON transcripts never truncate
         if not transcript_data:
             fallback_models = [
                 "gemini-3.5-flash-lite",
@@ -741,7 +973,14 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
             for f_model in fallback_models:
                 try:
                     logger.info("Attempting fallback transcription with model: %s", f_model)
-                    raw_fallback = _generate_with_gemini_flash_fallback(file_uri, api_key, model_name=f_model, language=language)
+                    try:
+                        raw_fallback = _generate_with_gemini_flash_fallback(
+                            file_uri, api_key, model_name=f_model, language=language, duration_seconds=video_duration
+                        )
+                    except TypeError:
+                        raw_fallback = _generate_with_gemini_flash_fallback(
+                            file_uri, api_key, model_name=f_model, language=language
+                        )
                     finish_reason = _extract_finish_reason(raw_fallback)
                     parsed_fallback = _parse_gemini_fallback_response(raw_fallback, api_key=api_key)
                     if parsed_fallback.get("words") or parsed_fallback.get("text"):
