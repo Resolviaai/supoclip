@@ -1,6 +1,6 @@
 import type { Config, Context } from "@netlify/edge-functions";
 
-const DEFAULT_UPSTREAM = "https://radia-woebegone-tricia.ngrok-free.dev";
+const DEFAULT_UPSTREAM = "https://structured-measurements-violations-computation.trycloudflare.com";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -38,7 +38,7 @@ export default async (request: Request, context: Context) => {
     headers.set(key, value);
   });
 
-  // Bypass ngrok free interstitial screen and preserve original public host/proto for Better Auth.
+  // Preserve original public host/proto for Better Auth & OAuth callbacks.
   headers.set("ngrok-skip-browser-warning", "1");
   headers.set("x-forwarded-host", incomingUrl.host);
   headers.set("x-forwarded-proto", "https");
@@ -51,74 +51,88 @@ export default async (request: Request, context: Context) => {
 
   const method = request.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
+  const isCriticalCallback = incomingUrl.pathname.startsWith("/api/social/callback") || incomingUrl.pathname.startsWith("/api/auth");
+  const maxAttempts = isCriticalCallback ? 3 : 1;
 
-  try {
-    const upstreamResponse = await fetch(upstreamUrl.toString(), {
-      method,
-      headers,
-      body: hasBody ? request.body : undefined,
-      redirect: "manual",
-    });
-
-    // If the upstream tunnel itself is offline or rate-limited (502/503/504/403 with ngrok error, or Cloudflare 530), show our clean offline page.
-    if (
-      (((upstreamResponse.status === 502 || upstreamResponse.status === 503 || upstreamResponse.status === 504 || upstreamResponse.status === 403) &&
-        upstreamResponse.headers.has("ngrok-error-code")) ||
-        upstreamResponse.status === 530) &&
-      (request.headers.get("accept") || "").includes("text/html")
-    ) {
-      const offlineRes = await context.next(new Request(new URL("/offline.html", incomingUrl)));
-      return new Response(offlineRes.body, {
-        status: 503,
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const upstreamResponse = await fetch(upstreamUrl.toString(), {
+        method,
+        headers,
+        body: hasBody ? request.body : undefined,
+        redirect: "manual",
       });
-    }
 
-    const responseHeaders = new Headers();
-    upstreamResponse.headers.forEach((value, key) => {
-      const lower = key.toLowerCase();
-      if (HOP_BY_HOP_HEADERS.has(lower) || lower === "set-cookie") return;
-      if (lower === "location") {
-        // Rewrite redirects targeting the upstream tunnel host back to the custom domain.
-        responseHeaders.set(
-          "location",
-          value.startsWith(upstreamBase)
-            ? `${incomingUrl.origin}${value.slice(upstreamBase.length)}`
-            : value,
-        );
-        return;
+      // If Cloudflare tunnel returns 530 (tunnel connecting) or ngrok error, retry if critical callback.
+      const isTunnelError =
+        upstreamResponse.status === 530 ||
+        (((upstreamResponse.status === 502 || upstreamResponse.status === 503 || upstreamResponse.status === 504 || upstreamResponse.status === 403) &&
+          upstreamResponse.headers.has("ngrok-error-code")));
+
+      if (isTunnelError && isCriticalCallback && attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
       }
-      responseHeaders.append(key, value);
-    });
 
-    // Preserve multi-value Set-Cookie headers cleanly.
-    const setCookies =
-      typeof upstreamResponse.headers.getSetCookie === "function"
-        ? upstreamResponse.headers.getSetCookie()
-        : upstreamResponse.headers.get("set-cookie")
-          ? [upstreamResponse.headers.get("set-cookie")!]
-          : [];
-    for (const cookie of setCookies) {
-      responseHeaders.append("set-cookie", rewriteCookieDomain(cookie, upstreamUrl.host));
-    }
+      if (isTunnelError && (request.headers.get("accept") || "").includes("text/html")) {
+        const offlineRes = await context.next(new Request(new URL("/offline.html", incomingUrl)));
+        return new Response(offlineRes.body, {
+          status: 503,
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
 
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers: responseHeaders,
-    });
-  } catch {
-    if ((request.headers.get("accept") || "").includes("text/html")) {
-      const offlineRes = await context.next(new Request(new URL("/offline.html", incomingUrl)));
-      return new Response(offlineRes.body, {
+      const responseHeaders = new Headers();
+      upstreamResponse.headers.forEach((value, key) => {
+        const lower = key.toLowerCase();
+        if (HOP_BY_HOP_HEADERS.has(lower) || lower === "set-cookie") return;
+        if (lower === "location") {
+          // Rewrite redirects targeting the upstream tunnel host back to the custom domain.
+          responseHeaders.set(
+            "location",
+            value.startsWith(upstreamBase)
+              ? `${incomingUrl.origin}${value.slice(upstreamBase.length)}`
+              : value,
+          );
+          return;
+        }
+        responseHeaders.append(key, value);
+      });
+
+      // Preserve multi-value Set-Cookie headers cleanly.
+      const setCookies =
+        typeof upstreamResponse.headers.getSetCookie === "function"
+          ? upstreamResponse.headers.getSetCookie()
+          : upstreamResponse.headers.get("set-cookie")
+            ? [upstreamResponse.headers.get("set-cookie")!]
+            : [];
+      for (const cookie of setCookies) {
+        responseHeaders.append("set-cookie", rewriteCookieDomain(cookie, upstreamUrl.host));
+      }
+
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        statusText: upstreamResponse.statusText,
+        headers: responseHeaders,
+      });
+    } catch (err) {
+      if (isCriticalCallback && attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
+      }
+
+      if ((request.headers.get("accept") || "").includes("text/html")) {
+        const offlineRes = await context.next(new Request(new URL("/offline.html", incomingUrl)));
+        return new Response(offlineRes.body, {
+          status: 503,
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "Upstream engine offline" }), {
         status: 503,
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
       });
     }
-    return new Response(JSON.stringify({ error: "Upstream engine offline" }), {
-      status: 503,
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
-    });
   }
 };
 

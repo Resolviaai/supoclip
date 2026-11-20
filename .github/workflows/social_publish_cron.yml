@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install boto3 requests python-dotenv
+          pip install boto3 requests python-dotenv requests-oauthlib
 
       - name: Execute Due Posts
         env:

@@ -32,6 +32,8 @@ docs/youtube-provider-registry*.json
 # Auto-updater runtime artifacts
 auto_updater.log
 auto_updater_status.json
+*.log
+scripts/*.log
 
 # Netlify local CLI state
 .netlify/

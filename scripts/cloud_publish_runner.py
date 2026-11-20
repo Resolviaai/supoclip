@@ -310,7 +310,7 @@ def publish_linkedin(account: Dict[str, Any], post: Dict[str, Any], local_path: 
 
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "LinkedIn-Version": "202401",
+        "LinkedIn-Version": os.getenv("LINKEDIN_API_VERSION", "202610"),
         "X-Restli-Protocol-Version": "2.0.0",
         "Content-Type": "application/json",
     }
