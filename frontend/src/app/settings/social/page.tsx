@@ -221,51 +221,69 @@ function SocialSettingsContent() {
                     }}
                   />
                 )}
-                {group.map((provider) => (
-                  <div
-                    key={provider.provider}
-                    className={`flex items-center gap-3 p-3 ${provider.configured ? "" : "text-muted-foreground"}`}
-                  >
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
-                      <SocialProviderIcon provider={provider.provider} className="size-5" />
-                    </span>
-                    <div className="min-w-0 flex-1 self-center">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                        <p className="text-sm font-medium">{provider.display_name}</p>
-                        {!provider.configured && (
-                          <Badge variant="secondary" className="font-normal text-muted-foreground">
-                            {provider.paused ? t("page.paused") : t("page.comingSoon")}
-                          </Badge>
+                {group.map((provider) => {
+                  const linkedAccounts = connections.filter(
+                    (c) => c.provider === provider.provider && c.status === "active"
+                  );
+                  const isLinked = linkedAccounts.length > 0;
+
+                  return (
+                    <div
+                      key={provider.provider}
+                      className={`flex items-center gap-3 p-3 ${provider.configured ? "" : "text-muted-foreground"}`}
+                    >
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
+                        <SocialProviderIcon provider={provider.provider} className="size-5" />
+                      </span>
+                      <div className="min-w-0 flex-1 self-center">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                          <p className="text-sm font-medium">{provider.display_name}</p>
+                          {isLinked && (
+                            <Badge
+                              variant="outline"
+                              className="gap-1 border-emerald-500/30 bg-emerald-500/10 font-normal text-emerald-600 dark:text-emerald-400"
+                            >
+                              <CheckCircle className="size-3" />
+                              {linkedAccounts.length === 1
+                                ? t("page.connected")
+                                : `${linkedAccounts.length} ${t("page.connected")}`}
+                            </Badge>
+                          )}
+                          {!provider.configured && (
+                            <Badge variant="secondary" className="font-normal text-muted-foreground">
+                              {provider.paused ? t("page.paused") : t("page.comingSoon")}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={t("page.platformDetails", { platform: provider.display_name })}
+                              className="inline-flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <Info className="size-3.5" aria-hidden="true" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs space-y-2" sideOffset={6}>
+                            {!provider.configured && <p>{provider.paused ? t("page.tiktokPaused") : t("page.verificationNote")}</p>}
+                            {t.has(`page.${provider.provider}Note`) && <p>{t(`page.${provider.provider}Note`)}</p>}
+                          </TooltipContent>
+                        </Tooltip>
+                        {provider.configured && (
+                          <Button asChild size="sm" variant={isLinked ? "ghost" : "outline"}>
+                            <a href={`/api/social/connect/${provider.provider}`}>
+                              {isLinked ? "+ Add another" : t("page.connect")}
+                              <ChevronRight className="size-4" />
+                            </a>
+                          </Button>
                         )}
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            aria-label={t("page.platformDetails", { platform: provider.display_name })}
-                            className="inline-flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <Info className="size-3.5" aria-hidden="true" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs space-y-2" sideOffset={6}>
-                          {!provider.configured && <p>{provider.paused ? t("page.tiktokPaused") : t("page.verificationNote")}</p>}
-                          {t.has(`page.${provider.provider}Note`) && <p>{t(`page.${provider.provider}Note`)}</p>}
-                        </TooltipContent>
-                      </Tooltip>
-                      {provider.configured && (
-                        <Button asChild size="sm" variant="outline">
-                          <a href={`/api/social/connect/${provider.provider}`}>
-                            {t("page.connect")}
-                            <ChevronRight className="size-4" />
-                          </a>
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>

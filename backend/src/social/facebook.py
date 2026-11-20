@@ -152,9 +152,10 @@ class FacebookProvider(SocialProvider):
 
         return OAuthTokens(
             access_token=effective_token,
-            refresh_token=None,
-            expires_at=expires_at,
-            scope=",".join(SCOPES),
+            refresh_token=long_lived_token,
+            expires_at=None if page_token else expires_at,
+            scopes=",".join(SCOPES),
+            raw=data,
         )
 
     def _exchange_for_long_lived_token(self, short_token: str) -> Tuple[str, Optional[datetime]]:
@@ -199,8 +200,15 @@ class FacebookProvider(SocialProvider):
         return None, None
 
     def refresh_tokens(self, refresh_token: str) -> OAuthTokens:
-        # Long-lived Facebook page tokens never expire unless password is changed
-        return OAuthTokens(access_token=refresh_token, refresh_token=None, expires_at=None)
+        tok, exp_dt = self._exchange_for_long_lived_token(refresh_token)
+        page_token, _ = self._resolve_page_credentials(tok)
+        effective = page_token or tok
+        return OAuthTokens(
+            access_token=effective,
+            refresh_token=tok,
+            expires_at=None if page_token else exp_dt,
+            scopes=",".join(SCOPES),
+        )
 
     def fetch_profile(self, access_token: str) -> AccountProfile:
         url = f"{GRAPH_API}/me"
@@ -222,19 +230,19 @@ class FacebookProvider(SocialProvider):
         pic = (data.get("picture") or {}).get("data", {}).get("url")
 
         return AccountProfile(
-            account_id=user_id,
+            external_account_id=user_id,
             display_name=name,
             username=name,
             avatar_url=pic,
-            raw=data,
+            metadata=data,
         )
 
     # -- Publishing -----------------------------------------------------
     def publish(self, access_token: str, request: PublishRequest) -> PublishResult:
-        if not request.local_file_path or not Path(request.local_file_path).exists():
+        if not request.file_path or not Path(request.file_path).exists():
             raise SocialProviderError("Local video file required for Facebook Reel upload")
 
-        video_path = Path(request.local_file_path)
+        video_path = Path(request.file_path)
         file_size = video_path.stat().st_size
         if file_size <= 0:
             raise SocialProviderError("Video file is empty")
@@ -243,7 +251,7 @@ class FacebookProvider(SocialProvider):
 
         # Profile check to get target page/user ID
         profile = self.fetch_profile(access_token)
-        target_id = profile.account_id
+        target_id = profile.external_account_id
 
         logger.info("Initializing Facebook Reel upload for ID %s (%d bytes)", target_id, file_size)
 

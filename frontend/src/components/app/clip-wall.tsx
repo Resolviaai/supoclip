@@ -90,7 +90,7 @@ function sourceMoments(clip: WallClip): SourceRange[] | null {
   return Array.isArray(ranges) && ranges.length > 1 ? ranges : null;
 }
 
-export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen, onDownload, onDelete, publishAction }: {
+export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen, onDownload, onDelete, publishAction, selected, onToggleSelect }: {
   clip: WallClip;
   taskId: string;
   busy: boolean;
@@ -102,29 +102,59 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
   onDownload: () => void;
   onDelete?: () => void;
   publishAction?: React.ReactNode;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const t = useTranslations("task");
   const title = clipTitle(clip, t);
   const why = clip.workflow_meta?.why;
   return (
-    <article className="group @container animate-rise">
-      <button
-        type="button"
+    <article className="group @container animate-rise relative">
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
         aria-label={t("preview", { title })}
-        className="block w-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] transition-transform duration-150"
+        className="block w-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] transition-transform duration-150 text-left cursor-pointer"
       >
         <ClipCover
           src={getClipUrl(clip.video_url, clip.filename)}
-          className="aspect-[9/16] rounded-xl ring-1 ring-black/5 transition-shadow duration-200 group-hover:shadow-xl"
+          className={cn(
+            "aspect-[9/16] rounded-xl ring-1 ring-black/5 transition-all duration-200 group-hover:shadow-xl",
+            selected && "ring-2 ring-primary shadow-lg ring-offset-2 ring-offset-background",
+          )}
         >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/25" />
+          {onToggleSelect && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSelect();
+              }}
+              aria-label={selected ? "Deselect clip" : "Select clip"}
+              className={cn(
+                "absolute left-2 top-2 z-20 flex size-7 sm:size-6 items-center justify-center rounded-lg border backdrop-blur transition-all active:scale-90",
+                selected
+                  ? "border-primary bg-primary text-primary-foreground shadow-sm opacity-100 ring-1 ring-white/20"
+                  : "border-white/50 bg-black/60 text-white/50 hover:border-white hover:text-white max-md:opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100",
+              )}
+            >
+              <Check className={cn("size-4 sm:size-3.5 stroke-[2.5]", selected ? "opacity-100" : "opacity-0")} />
+            </button>
+          )}
           {isPart(clip) ? (
-            <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-white backdrop-blur">
+            <span className={cn("absolute top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-white backdrop-blur", onToggleSelect ? "left-10" : "left-2")}>
               {partTotal ? t("partOf", { n: clip.part_number, total: partTotal }) : t("partLabel", { n: clip.part_number })}
             </span>
           ) : best && (
-            <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-brand px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-foreground shadow">
+            <span className={cn("absolute top-2 inline-flex items-center gap-1 rounded-full bg-brand px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-foreground shadow", onToggleSelect ? "left-10" : "left-2")}>
               <Flame className="size-3" />{t("topPick")}
             </span>
           )}
@@ -138,7 +168,7 @@ export function ClipTile({ clip, taskId, busy, best, editable, partTotal, onOpen
           </span>
           <span className="absolute bottom-2 right-2 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">{formatClipDuration(clip.duration)}</span>
         </ClipCover>
-      </button>
+      </div>
       <div className="mt-2.5 px-0.5">
         {why ? (
           <Tooltip>

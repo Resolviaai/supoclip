@@ -15,6 +15,7 @@ import { trackClipExport } from "@/lib/clip-export-tracking";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { taskPathFromCreate } from "@/lib/task-create";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { PageLoading, PageError } from "@/components/app/page-state";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -46,8 +47,10 @@ import {
   AlertCircle,
   ArrowLeft,
   Check,
+  CheckSquare,
   Clapperboard,
   Clock,
+  Download,
   Edit2,
   ExternalLink,
   Link2Off,
@@ -56,6 +59,7 @@ import {
   MoreHorizontal,
   PauseCircle,
   RotateCcw,
+  Send,
   Settings2,
   Share2,
   Trash2,
@@ -68,6 +72,7 @@ import { ClipTile, ClipFocus, ProcessingPanel, ProcessingSlots, EmptyState, clip
 import { orderedParts, seriesPartTotal, SeriesView, unfinishedSeries } from "@/components/app/series-view";
 import { HeroClipView } from "@/components/app/hero-clip-view";
 import { DownloadAllButton } from "@/components/app/download-all-button";
+import { BatchPublishModal } from "@/components/app/batch-publish-modal";
 import { buildRecreateBody, createActionId, isWorkflowErrorCode, WorkflowFailure } from "@/components/app/workflow-failure";
 import { availableWorkflows, useWorkflowsInfo } from "@/components/workflow-picker";
 import { intlLocale } from "@/i18n/config";
@@ -253,6 +258,8 @@ export default function TaskPage() {
   const sortChosen = useRef(false);
   const [focusIndex, setFocusIndex] = useState<number | null>(null);
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
+  const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
+  const [batchPublishOpen, setBatchPublishOpen] = useState(false);
 
   const taskApiUrl = "/api/tasks";
 
@@ -799,6 +806,22 @@ export default function TaskPage() {
   const heroClip = SINGLE_OUTPUT.has(workflow) && clips.length === 1 ? clips[0] : null;
   const seriesIncomplete = isSeries && unfinishedSeries(task?.status, plan, clips) !== null;
   const topicName = plan?.topic?.query || task?.workflow_options?.topic || plan?.title || "";
+
+  const toggleSelectClip = (clipId: string) => {
+    setSelectedClipIds((prev) =>
+      prev.includes(clipId) ? prev.filter((id) => id !== clipId) : [...prev, clipId]
+    );
+  };
+
+  const selectAllClips = () => {
+    if (selectedClipIds.length === sortedClips.length) {
+      setSelectedClipIds([]);
+    } else {
+      setSelectedClipIds(sortedClips.map((c) => c.id));
+    }
+  };
+
+  const selectedClips = sortedClips.filter((c) => selectedClipIds.includes(c.id));
   const instructions = task?.workflow_options?.instructions?.trim();
   const expectedTotal = task
     ? (isSeries && plan?.parts?.length) || expectedOutputs(workflow, task.source_duration_seconds, task.workflow_options?.part_count)
@@ -853,6 +876,8 @@ export default function TaskPage() {
       onDelete={readOnly ? undefined : () => setDeletingClipId(clip.id)}
       editable={task?.status === "completed" && !readOnly}
       publishAction={publishButton(clip, true)}
+      selected={selectedClipIds.includes(clip.id)}
+      onToggleSelect={task?.status === "completed" && !readOnly ? () => toggleSelectClip(clip.id) : undefined}
     />
   );
 
@@ -1101,6 +1126,19 @@ export default function TaskPage() {
                 </div>
               ) : <span />}
               <div className="flex items-center gap-2">
+                {task?.status === "completed" && !readOnly && sortedClips.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={selectAllClips}
+                    className="h-8 gap-1.5 text-xs rounded-lg active:scale-95 transition-transform"
+                  >
+                    <CheckSquare className="size-3.5" />
+                    {selectedClipIds.length === sortedClips.length && sortedClips.length > 0
+                      ? "Deselect All"
+                      : "Select All"}
+                  </Button>
+                )}
                 <DownloadAllButton label={t("downloadAll")} hint={t("downloadAllHint")} busy={isDownloadingAll} onClick={() => void handleDownloadAll()} />
                 {formatSelect}
               </div>
@@ -1353,6 +1391,62 @@ export default function TaskPage() {
         billing={billingSummary}
         source="task_resume"
       />
+
+      {/* Floating Sticky Batch Action Bar (Mobile native-positioned above tab bar) */}
+      {selectedClipIds.length > 0 && (
+        <div className="fixed max-md:bottom-[calc(4.75rem+env(safe-area-inset-bottom))] md:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center justify-between max-md:w-[calc(100vw-1.5rem)] max-w-xl gap-2 sm:gap-3 rounded-2xl border border-border/80 bg-background/95 px-3 py-2 sm:px-4 sm:py-2.5 shadow-2xl backdrop-blur-2xl animate-in fade-in slide-in-from-bottom-4 duration-200">
+          <div className="flex items-center gap-1.5 sm:gap-2 pr-2 border-r border-border/60 shrink-0">
+            <Badge variant="secondary" className="gap-1 font-semibold text-[11px] sm:text-xs tabular-nums px-2 py-0.5 sm:px-2.5 sm:py-1">
+              <Check className="size-3 text-primary shrink-0" />
+              <span>{selectedClipIds.length}</span>
+              <span className="hidden sm:inline">{selectedClipIds.length === 1 ? "clip" : "clips"}</span>
+            </Badge>
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-1 justify-end">
+            <Button
+              size="sm"
+              onClick={() => setBatchPublishOpen(true)}
+              className="h-9 sm:h-8 gap-1.5 text-xs font-semibold rounded-xl active:scale-95 transition-transform px-3"
+            >
+              <Send className="size-3.5" />
+              <span>Publish ({selectedClipIds.length})</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                selectedClips.forEach((c) => handleDownloadClip(c));
+              }}
+              className="h-9 sm:h-8 gap-1.5 text-xs rounded-xl active:scale-95 transition-transform px-2.5 sm:px-3"
+            >
+              <Download className="size-3.5" />
+              <span className="hidden sm:inline">Download</span>
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => setSelectedClipIds([])}
+              className="size-9 sm:size-8 rounded-xl text-muted-foreground hover:text-foreground active:scale-90"
+              aria-label="Clear selection"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-Clip Batch Publish Modal */}
+      {task && (
+        <BatchPublishModal
+          open={batchPublishOpen}
+          onOpenChange={setBatchPublishOpen}
+          taskId={task.id}
+          clips={selectedClips}
+          connections={socialConnections}
+          providers={socialProviders}
+          onPublished={loadSocialPosts}
+        />
+      )}
     </main>
   );
 }

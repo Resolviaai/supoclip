@@ -188,3 +188,57 @@ export function durationBucketLabel(bucket: string): string {
       return bucket;
   }
 }
+
+export type DripStrategy = "immediate" | "every_3_hours" | "daily_peak";
+
+/**
+ * Generates human-like staggered schedule dates for batch clip publishing.
+ * Injects natural timing jitter (±4 to 12 minutes) to ensure platform algorithms
+ * perceive uploads as organic, authentic creator activity rather than robotic automation.
+ */
+export function generateDripSchedule(
+  count: number,
+  strategy: DripStrategy,
+  startDate: Date = new Date(),
+): (string | null)[] {
+  const dates: (string | null)[] = [];
+  const baseTime = startDate.getTime();
+
+  for (let i = 0; i < count; i++) {
+    if (strategy === "immediate") {
+      // First clip is immediate; subsequent clips get a 90-second buffer
+      // to prevent same-account rate limiting / robotic burst flags.
+      if (i === 0) {
+        dates.push(null);
+      } else {
+        const bufferedTime = new Date(baseTime + i * 90 * 1000);
+        dates.push(bufferedTime.toISOString());
+      }
+      continue;
+    }
+
+    // Natural random jitter: -6 to +11 minutes in milliseconds
+    const jitterMs = (Math.floor(Math.random() * 18) - 6) * 60 * 1000;
+
+    if (strategy === "every_3_hours") {
+      const offsetMs = (i + 1) * 3 * 60 * 60 * 1000 + jitterMs;
+      const scheduled = new Date(baseTime + Math.max(offsetMs, 5 * 60 * 1000));
+      dates.push(scheduled.toISOString());
+    } else if (strategy === "daily_peak") {
+      // Target peak engagement hours: 18:30 (6:30 PM local)
+      const targetDate = new Date(startDate);
+      targetDate.setDate(targetDate.getDate() + i);
+      targetDate.setHours(18, 30, 0, 0);
+
+      // If the target peak time today is already in the past, push by +1 day
+      if (targetDate.getTime() <= baseTime + 15 * 60 * 1000) {
+        targetDate.setDate(targetDate.getDate() + 1);
+      }
+
+      const scheduledWithJitter = new Date(targetDate.getTime() + jitterMs);
+      dates.push(scheduledWithJitter.toISOString());
+    }
+  }
+
+  return dates;
+}
