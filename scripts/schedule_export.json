@@ -602,7 +602,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_2_0247-0315_9e4296ba774f.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "No module named 'requests_oauthlib'",
+      "failed_at": "2026-11-20T10:43:31.545595+00:00"
     },
     {
       "id": "bd8ef840-efc3-40f9-82e1-02b975c536bc",
@@ -619,7 +621,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_2_0247-0315_9e4296ba774f.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AP_P9Q4SJfSDeKGTSnr28eW\"}}",
+      "failed_at": "2026-11-20T10:43:31.609369+00:00"
     },
     {
       "id": "89452e4e-1a55-419c-9c53-d94d1fabc29c",
@@ -636,7 +640,10 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_2_0247-0315_9e4296ba774f.mp4",
-      "status": "scheduled"
+      "status": "published",
+      "published_at": "2026-11-20T10:43:39.247920+00:00",
+      "external_post_id": "1438951124552283",
+      "external_url": "https://www.facebook.com/reel/1438951124552283"
     },
     {
       "id": "f3216716-a0e8-4b4e-8098-031f9f53acdb",
@@ -654,7 +661,10 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_2_0247-0315_9e4296ba774f.mp4",
-      "status": "scheduled"
+      "status": "published",
+      "published_at": "2026-11-20T10:43:41.813950+00:00",
+      "external_post_id": "iCEwTNjPymc",
+      "external_url": "https://www.youtube.com/shorts/iCEwTNjPymc"
     },
     {
       "id": "01347681-770c-4b5e-91ed-79f0b300b62d",
@@ -671,7 +681,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "No module named 'requests_oauthlib'",
+      "failed_at": "2026-11-20T10:43:42.608435+00:00"
     },
     {
       "id": "d6c16ae3-e49e-4b1d-b61a-ae38547a5f37",
@@ -689,7 +701,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "LinkedIn init upload failed (426): {\"status\":426,\"code\":\"NONEXISTENT_VERSION\",\"message\":\"Requested version 20240101 is not active\"}",
+      "failed_at": "2026-11-20T10:43:43.626235+00:00"
     },
     {
       "id": "c43825f6-fa94-4e08-8234-f91e8ae3d0c0",
@@ -708,7 +722,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AwjGlPe-vlupz2KWOT8wzE9\"}}",
+      "failed_at": "2026-11-20T10:43:43.693251+00:00"
     },
     {
       "id": "ad96503d-71d2-42d0-aef6-e84a0ad632f2",
@@ -726,7 +742,10 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
-      "status": "scheduled"
+      "status": "published",
+      "published_at": "2026-11-20T10:43:50.644601+00:00",
+      "external_post_id": "914880284949159",
+      "external_url": "https://www.facebook.com/reel/914880284949159"
     },
     {
       "id": "ceccd9bf-05eb-4688-9caa-4fe0602b92fc",
@@ -744,7 +763,10 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
-      "status": "scheduled"
+      "status": "published",
+      "published_at": "2026-11-20T10:43:52.697769+00:00",
+      "external_post_id": "p3cYD2o24fI",
+      "external_url": "https://www.youtube.com/shorts/p3cYD2o24fI"
     },
     {
       "id": "59c860bd-a882-47bf-9a46-4687aa379d6e",
@@ -768,7 +790,9 @@
       "hashtags": [],
       "privacy_level": "unlisted",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0714-0739_344f7e0c97e9.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "An error occurred (404) when calling the HeadObject operation: Not Found",
+      "failed_at": "2026-11-20T10:43:52.986053+00:00"
     }
   ]
 }
