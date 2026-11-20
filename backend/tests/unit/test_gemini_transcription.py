@@ -327,13 +327,38 @@ def test_is_truncated_transcript_detects_gap_and_low_wpm():
     starved_transcript = {"words": starved_words}
     assert _is_truncated_transcript(starved_transcript, video_duration_seconds=300.0) is True
 
-    # Case 3: Normal conversational transcript (120 WPM, no gaps > 35s)
+    # Case 3: Normal conversational transcript (120 WPM, no gaps > 35s, covers video)
     normal_words = [
         {"text": f"word{i}", "start": i * 500, "end": i * 500 + 400}
         for i in range(200)
     ]
     normal_transcript = {"words": normal_words}
     assert _is_truncated_transcript(normal_transcript, video_duration_seconds=100.0) is False
+
+    # Case 4: Trailing gap (last word ends at 200s for a 300s video -> 100s missing at the end)
+    trailing_words = [
+        {"text": f"word{i}", "start": i * 500, "end": i * 500 + 400}
+        for i in range(400)  # ends at 200s
+    ]
+    trailing_transcript = {"words": trailing_words}
+    assert _is_truncated_transcript(trailing_transcript, video_duration_seconds=300.0) is True
+
+
+def test_normalize_tokens_fast_path_for_english(monkeypatch):
+    tokens = ["Welcome", "to", "the", "future", "of", "video", "creation", "in", "2027"]
+    # Ensure requests.post is NEVER called on non-Devanagari tokens
+    post_called = False
+
+    def fake_post(*a, **kw):
+        nonlocal post_called
+        post_called = True
+        raise RuntimeError("Should not be called for English tokens")
+
+    monkeypatch.setattr("requests.post", fake_post)
+    normalized = normalize_tokens_with_llm(tokens, api_key="some-key")
+    assert not post_called
+    assert len(normalized) == len(tokens)
+    assert normalized == tokens
 
 
 if __name__ == "__main__":

@@ -550,11 +550,16 @@ def normalize_tokens_with_llm(
 
     chunks = [tokens[i : i + chunk_size] for i in range(0, len(tokens), chunk_size)]
     if len(chunks) == 1:
+        if not any(has_devanagari(t) for t in chunks[0]):
+            return [clean_hinglish_spelling(t) for t in chunks[0]]
         return _normalize_token_chunk_with_gemini(chunks[0], eff_key, timeout=timeout)
 
     results: List[List[str]] = [[] for _ in range(len(chunks))]
 
     def _worker(idx: int, c_tokens: List[str]):
+        if not any(has_devanagari(t) for t in c_tokens):
+            results[idx] = [clean_hinglish_spelling(t) for t in c_tokens]
+            return
         results[idx] = _normalize_token_chunk_with_gemini(c_tokens, eff_key, timeout=timeout)
 
     with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:

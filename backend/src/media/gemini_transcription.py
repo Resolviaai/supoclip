@@ -445,11 +445,21 @@ def _is_truncated_transcript(
     if finish_reason == "MAX_TOKENS" and coverage < video_duration_seconds * 0.85:
         return True
 
-    # 2. Coverage stopped well short of video duration (less than 70%)
-    if coverage < video_duration_seconds * 0.70:
+    # 2. Coverage stopped well short of video duration (less than 85%)
+    if coverage < video_duration_seconds * 0.85:
         return True
 
-    # 3. Word starvation: conversational speech is typically 120-160 WPM. Anything < 30 WPM on a video >= 60s
+    # 3. Trailing speech gap at the end of the video (>40s missing before video ends)
+    if video_duration_seconds >= 60.0 and (video_duration_seconds - coverage) > 40.0:
+        logger.warning(
+            "Transcript stops prematurely: last word at %.1fs of %.1fs video (%.1fs trailing gap)",
+            coverage,
+            video_duration_seconds,
+            video_duration_seconds - coverage,
+        )
+        return True
+
+    # 4. Word starvation: conversational speech is typically 120-160 WPM. Anything < 30 WPM on a video >= 60s
     # indicates massive dropped speech (e.g. 195 words on a 603s video = 19.4 WPM).
     if video_duration_seconds >= 60.0:
         wpm = len(words) / (video_duration_seconds / 60.0)
@@ -462,7 +472,7 @@ def _is_truncated_transcript(
             )
             return True
 
-    # 4. Large internal speech gap: conversational videos do not have 35+ seconds of complete silence.
+    # 5. Large internal speech gap: conversational videos do not have 35+ seconds of complete silence.
     # A gap > 35s between consecutive words indicates speech dropout.
     if words and len(words) >= 2 and video_duration_seconds >= 60.0:
         for i in range(len(words) - 1):
@@ -778,6 +788,7 @@ def _transcribe_audio_in_chunks(
         try:
             chunk_fname, chunk_furi = _upload_audio_file(chunk_file, api_key)
             chunk_parsed: Optional[Dict[str, Any]] = None
+            step_a_candidate: Optional[Dict[str, Any]] = None
 
             # Step A: Try gemini-3.5-transcribe with 1 retry on 429/503
             for attempt in range(2):
@@ -794,9 +805,10 @@ def _transcribe_audio_in_chunks(
                     # If chunk is starved or dropped speech, reject gemini-3.5-transcribe and fall back to flash-lite
                     if c_wpm < 40.0 or has_gap or (chunk_len >= 45.0 and len(c_words) < 20):
                         logger.warning(
-                            "Chunk %d (%.1fs - %.1fs) had low transcribe coverage (%d words, %.1f WPM, gap=%s); using flash-lite fallback",
+                            "Chunk %d (%.1fs - %.1fs) had low transcribe coverage (%d words, %.1f WPM, gap=%s); trying flash-lite fallback",
                             idx, start_sec, end_sec, len(c_words), c_wpm, has_gap
                         )
+                        step_a_candidate = parsed
                         break
                     chunk_parsed = parsed
                     break
@@ -807,24 +819,37 @@ def _transcribe_audio_in_chunks(
                     logger.warning("Chunk %d gemini-3.5-transcribe failed: %s; falling back to flash-lite", idx, err)
                     break
 
-            # Step B: If gemini-3.5-transcribe was starved or failed, use gemini-3.5-flash-lite on this chunk
+            # Step B: If gemini-3.5-transcribe was starved or failed, use flash-lite models on this chunk
             if not chunk_parsed:
-                for fb_model in ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"):
+                for fb_model in (
+                    "gemini-3.5-flash-lite",
+                    "gemini-3.1-flash-lite",
+                    "gemini-flash-lite-latest",
+                    "gemini-2.5-flash",
+                    "gemini-3.8-flash",
+                ):
                     try:
                         raw_fb = _generate_with_gemini_flash_fallback(
                             chunk_furi, api_key, model_name=fb_model, language=language, duration_seconds=chunk_len
                         )
                         parsed_fb = _parse_gemini_fallback_response(raw_fb, api_key=api_key)
-                        if parsed_fb.get("words") or parsed_fb.get("utterances"):
+                        if isinstance(parsed_fb, dict):
                             chunk_parsed = parsed_fb
-                            logger.info("Chunk %d transcribed by %s fallback: %d words", idx, fb_model, len(chunk_parsed.get("words", [])))
+                            n_words = len(chunk_parsed.get("words", []))
+                            logger.info("Chunk %d transcribed by %s fallback: %d words", idx, fb_model, n_words)
                             break
                     except Exception as fb_err:
+                        if any(code in str(fb_err) for code in ("429", "503", "ResourceExhausted")):
+                            time.sleep(3.0)
                         logger.warning("Chunk %d fallback %s failed: %s", idx, fb_model, fb_err)
 
+            if not chunk_parsed and step_a_candidate is not None:
+                logger.info("Using partial transcribe output for chunk %d as best available", idx)
+                chunk_parsed = step_a_candidate
+
             if not chunk_parsed:
-                logger.error("Failed to transcribe chunk %d with all models", idx)
-                return None
+                logger.warning("Could not transcribe chunk %d; treating as silent chunk to preserve video speech", idx)
+                chunk_parsed = {"words": [], "utterances": [], "text": ""}
 
             # Offset timestamps to global video timeline
             offset_ms = int(start_sec * 1000)
@@ -909,45 +934,10 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
             best_partial_coverage = cov
 
     try:
-        # 1. Primary: gemini-3.5-transcribe (retry once on transient 503/429 before falling back)
-        for attempt in range(2):
-            try:
-                logger.info("Starting primary transcription with model: gemini-3.5-transcribe (attempt %d/2)", attempt + 1)
-                raw_response = _generate_with_gemini_transcribe(file_uri, api_key, language)
-                finish_reason = _extract_finish_reason(raw_response)
-                parsed = _parse_gemini_transcribe_response(raw_response, api_key=api_key)
-                if parsed.get("words") or parsed.get("text"):
-                    if _is_truncated_transcript(parsed, video_duration, finish_reason):
-                        cov = _transcript_coverage_seconds(parsed)
-                        logger.warning(
-                            "Primary gemini-3.5-transcribe returned low-coverage transcript "
-                            "(%.1fs/%.1fs, finish=%s, words=%d); trying fallback models for fuller coverage",
-                            cov,
-                            video_duration,
-                            finish_reason or "unknown",
-                            len(parsed.get("words") or []),
-                        )
-                        _record_partial(parsed)
-                        break
-                    transcript_data = parsed
-                    logger.info(
-                        "gemini-3.5-transcribe succeeded: %d words, %d utterances",
-                        len(parsed["words"]),
-                        len(parsed["utterances"]),
-                    )
-                    break
-                logger.warning("gemini-3.5-transcribe returned empty output; attempting fallback")
-                break
-            except Exception as primary_err:
-                if attempt == 0 and any(code in str(primary_err) for code in ("503", "429", "500", "502", "504")):
-                    logger.warning("Primary gemini-3.5-transcribe transient error (%s); retrying in 4s...", primary_err)
-                    time.sleep(4)
-                    continue
-                logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
-                break
-
-        # 2. For long audio (>90s), try silence-bounded chunking before monolithic fallbacks
-        if not transcript_data and video_duration > 90.0:
+        # 1. Primary for long audio (>120s): silence-bounded chunking with gemini-3.5-transcribe
+        # Monolithic transcription on long audio is prone to silent token drops.
+        if video_duration > 120.0:
+            logger.info("Long video (%.1fs > 120s): using silence-bounded chunked transcription", video_duration)
             try:
                 chunked_result = _transcribe_audio_in_chunks(audio_path, video_duration, api_key, language)
                 if chunked_result and not _is_truncated_transcript(chunked_result, video_duration):
@@ -958,7 +948,59 @@ def get_transcript_with_gemini(video_path: Path, runtime_config: Any) -> str:
                         len(chunked_result["utterances"]),
                     )
             except Exception as chunk_err:
-                logger.warning("Chunked transcription failed (%s); trying monolithic fallback models", chunk_err)
+                logger.warning("Chunked transcription failed (%s); trying fallback strategies", chunk_err)
+
+        # 2. For shorter audio (<=120s) or fallback: monolithic gemini-3.5-transcribe
+        if not transcript_data:
+            for attempt in range(2):
+                try:
+                    logger.info("Starting transcription with model: gemini-3.5-transcribe (attempt %d/2)", attempt + 1)
+                    raw_response = _generate_with_gemini_transcribe(file_uri, api_key, language)
+                    finish_reason = _extract_finish_reason(raw_response)
+                    parsed = _parse_gemini_transcribe_response(raw_response, api_key=api_key)
+                    if parsed.get("words") or parsed.get("text"):
+                        if _is_truncated_transcript(parsed, video_duration, finish_reason):
+                            cov = _transcript_coverage_seconds(parsed)
+                            logger.warning(
+                                "Primary gemini-3.5-transcribe returned low-coverage transcript "
+                                "(%.1fs/%.1fs, finish=%s, words=%d); trying fallback models for fuller coverage",
+                                cov,
+                                video_duration,
+                                finish_reason or "unknown",
+                                len(parsed.get("words") or []),
+                            )
+                            _record_partial(parsed)
+                            break
+                        transcript_data = parsed
+                        logger.info(
+                            "gemini-3.5-transcribe succeeded: %d words, %d utterances",
+                            len(parsed["words"]),
+                            len(parsed["utterances"]),
+                        )
+                        break
+                    logger.warning("gemini-3.5-transcribe returned empty output; attempting fallback")
+                    break
+                except Exception as primary_err:
+                    if attempt == 0 and any(code in str(primary_err) for code in ("503", "429", "500", "502", "504")):
+                        logger.warning("Primary gemini-3.5-transcribe transient error (%s); retrying in 4s...", primary_err)
+                        time.sleep(4)
+                        continue
+                    logger.warning("Primary gemini-3.5-transcribe failed: %s. Initiating fallback...", primary_err)
+                    break
+
+        # 3. If still needed for audio between 60s and 120s where monolithic failed, try chunking before monolithic fallbacks
+        if not transcript_data and video_duration > 60.0:
+            try:
+                chunked_result = _transcribe_audio_in_chunks(audio_path, video_duration, api_key, language)
+                if chunked_result and not _is_truncated_transcript(chunked_result, video_duration):
+                    transcript_data = chunked_result
+                    logger.info(
+                        "Fallback chunked transcription succeeded: %d words, %d utterances",
+                        len(chunked_result["words"]),
+                        len(chunked_result["utterances"]),
+                    )
+            except Exception as chunk_err:
+                logger.warning("Fallback chunked transcription failed (%s); trying monolithic fallback models", chunk_err)
 
         # 3. Fallback: prefer non-thinking flash-lite models first so full-length JSON transcripts never truncate
         if not transcript_data:
