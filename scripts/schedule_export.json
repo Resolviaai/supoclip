@@ -451,7 +451,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0142-0222_e3fbfc393ae0.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "Twitter upload INIT failed (403): ",
+      "failed_at": "2026-11-21T07:34:18.844654+00:00"
     },
     {
       "id": "b83be05c-7de4-4721-8499-20c2a305f064",
@@ -468,7 +470,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0142-0222_e3fbfc393ae0.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "LinkedIn video chunk PUT failed: ",
+      "failed_at": "2026-11-21T07:34:20.314023+00:00"
     },
     {
       "id": "65744e2b-4e83-44aa-bb07-9cf039554886",
@@ -485,7 +489,9 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0142-0222_e3fbfc393ae0.mp4",
-      "status": "scheduled"
+      "status": "scheduled",
+      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AY3GMiDu5129544yXh2mpQl\"}}",
+      "failed_at": "2026-11-21T07:34:20.552946+00:00"
     },
     {
       "id": "63baeb18-57b7-474d-9ac5-287b2afb5ac3",
@@ -502,7 +508,10 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0142-0222_e3fbfc393ae0.mp4",
-      "status": "scheduled"
+      "status": "published",
+      "published_at": "2026-11-21T07:34:30.450482+00:00",
+      "external_post_id": "1477975247772185",
+      "external_url": "https://www.facebook.com/reel/1477975247772185"
     },
     {
       "id": "778e44f5-b12c-4216-b51d-9781649a78e0",
@@ -519,7 +528,10 @@
       ],
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0142-0222_e3fbfc393ae0.mp4",
-      "status": "scheduled"
+      "status": "published",
+      "published_at": "2026-11-21T07:34:32.723120+00:00",
+      "external_post_id": "mpK_JNupujU",
+      "external_url": "https://www.youtube.com/shorts/mpK_JNupujU"
     },
     {
       "id": "98356e8d-4ea5-4603-98dc-409bacd1ce5e",
@@ -537,7 +549,7 @@
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_3_0000-0024_1ab982e89641.mp4",
       "status": "scheduled",
       "last_error": "Twitter upload INIT failed (403): ",
-      "failed_at": "2026-11-20T18:54:45.685219+00:00"
+      "failed_at": "2026-11-21T07:34:35.755858+00:00"
     },
     {
       "id": "51140b83-e32a-44ca-918d-d01dcf81663c",
@@ -555,8 +567,8 @@
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_3_0000-0024_1ab982e89641.mp4",
       "status": "scheduled",
-      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"ALx38-cxMSC29U738gQ5Pt-\"}}",
-      "failed_at": "2026-11-20T18:54:45.766778+00:00"
+      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AFFKPwd-IUWau9a5yOf3UKI\"}}",
+      "failed_at": "2026-11-21T07:34:35.960956+00:00"
     },
     {
       "id": "92424ab9-14fb-49a2-bcbe-280ea4be062c",
@@ -614,7 +626,7 @@
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_2_0247-0315_9e4296ba774f.mp4",
       "status": "scheduled",
       "last_error": "Twitter upload INIT failed (403): ",
-      "failed_at": "2026-11-20T18:54:59.234733+00:00"
+      "failed_at": "2026-11-21T07:34:36.717973+00:00"
     },
     {
       "id": "bd8ef840-efc3-40f9-82e1-02b975c536bc",
@@ -632,8 +644,8 @@
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_2_0247-0315_9e4296ba774f.mp4",
       "status": "scheduled",
-      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AyZhk5xAbSs5dQrsjnezUXu\"}}",
-      "failed_at": "2026-11-20T18:54:59.314388+00:00"
+      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AIGqmDicBm4tJ14mG18ayZc\"}}",
+      "failed_at": "2026-11-21T07:34:36.925889+00:00"
     },
     {
       "id": "89452e4e-1a55-419c-9c53-d94d1fabc29c",
@@ -693,7 +705,7 @@
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
       "status": "scheduled",
       "last_error": "Twitter upload INIT failed (403): ",
-      "failed_at": "2026-11-20T18:55:00.575347+00:00"
+      "failed_at": "2026-11-21T07:34:40.481519+00:00"
     },
     {
       "id": "d6c16ae3-e49e-4b1d-b61a-ae38547a5f37",
@@ -713,7 +725,7 @@
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
       "status": "scheduled",
       "last_error": "LinkedIn video chunk PUT failed: ",
-      "failed_at": "2026-11-20T18:55:03.133058+00:00"
+      "failed_at": "2026-11-21T07:34:42.665328+00:00"
     },
     {
       "id": "c43825f6-fa94-4e08-8234-f91e8ae3d0c0",
@@ -733,8 +745,8 @@
       "privacy_level": "public",
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0534-0623_768883698092.mp4",
       "status": "scheduled",
-      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"AmwuyTOUiRpQIsboMyg36fP\"}}",
-      "failed_at": "2026-11-20T18:55:03.228381+00:00"
+      "last_error": "Instagram container creation failed: {\"error\":{\"message\":\"Invalid OAuth access token - Cannot parse access token\",\"code\":190,\"type\":\"OAuthException\",\"fbtrace_id\":\"APTebS_fE-6oKrz7HBV5Z53\"}}",
+      "failed_at": "2026-11-21T07:34:42.876669+00:00"
     },
     {
       "id": "ad96503d-71d2-42d0-aef6-e84a0ad632f2",
@@ -790,7 +802,7 @@
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_1_0202-0235_59f264deb095.mp4",
       "status": "scheduled",
       "last_error": "An error occurred (404) when calling the HeadObject operation: Not Found",
-      "failed_at": "2026-11-20T18:55:03.593609+00:00"
+      "failed_at": "2026-11-21T07:34:43.138079+00:00"
     },
     {
       "id": "9eb4f62b-04f8-47d4-bac2-d923844e90e0",
@@ -804,7 +816,7 @@
       "source_file_path": "s3://dispatch-clips/supoclip/clips/clip_4_0714-0739_344f7e0c97e9.mp4",
       "status": "scheduled",
       "last_error": "An error occurred (404) when calling the HeadObject operation: Not Found",
-      "failed_at": "2026-11-20T18:55:03.976280+00:00"
+      "failed_at": "2026-11-21T07:34:43.399932+00:00"
     }
   ]
 }
