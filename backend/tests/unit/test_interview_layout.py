@@ -346,7 +346,7 @@ def cut_clip(tmp_path):
         "-f", "lavfi", "-i", "color=blue:s=640x360:r=30:d=0.9667",
         "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
         "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p[v]",
-        "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-c:a", "aac", "-shortest", str(path),
+        "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-bf", "0", "-c:a", "aac", "-shortest", str(path),
     ], capture_output=True, timeout=60)
     assert result.returncode == 0, result.stderr
     return path
@@ -371,7 +371,7 @@ def test_rendered_interview_keeps_every_frame_at_1080x1920(cut_clip):
     graph, _ = build_interview_filter(segments, 640, 360)
     result = subprocess.run([
         "ffmpeg", "-v", "error", "-i", str(cut_clip), "-filter_complex", graph + ";[vout]scale=54:96[p]",
-        "-map", "[p]", "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
+        "-map", "[p]", "-r", "30", "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
     ], capture_output=True, timeout=60)
     assert result.returncode == 0, result.stderr
     frames = np.frombuffer(result.stdout, np.uint8).reshape(-1, 96, 54, 3)
