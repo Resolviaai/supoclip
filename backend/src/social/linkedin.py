@@ -233,7 +233,7 @@ class LinkedInProvider(SocialProvider):
 
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "Linkedin-Version": LINKEDIN_API_VERSION,
+            "LinkedIn-Version": LINKEDIN_API_VERSION,
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
@@ -426,7 +426,7 @@ class LinkedInProvider(SocialProvider):
 
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "Linkedin-Version": LINKEDIN_API_VERSION,
+            "LinkedIn-Version": LINKEDIN_API_VERSION,
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
