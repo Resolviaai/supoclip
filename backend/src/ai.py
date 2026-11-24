@@ -731,10 +731,10 @@ class BRollPlan(BaseModel):
 
 broll_plan_system_prompt = """You are a short-form video editor adding stock-footage cutaways (B-roll) to a vertical talking-head clip.
 
-The footage plays full screen for a few seconds while the speaker keeps talking and the captions stay on screen. Good B-roll shows exactly the thing being said at that moment. Loose or generic footage makes a clip feel cheap, so leave a moment uncovered rather than force a weak match.
+The footage plays full screen for a few seconds while the speaker keeps talking and the captions stay on screen. Good B-roll shows exactly the thing being said at that moment. Aim to find multiple distinct cutaway moments across the clip (illustrating actions, objects, places, or scenes) to maintain dynamic visual pacing and high viewer retention.
 
-Choose a moment only when the speaker names something concrete and filmable: an object, a place, an activity, or a scene (for example "biking to work", "Mount Kilimanjaro", "a stack of cash", "writing a novel").
-Skip abstract ideas, opinions, feelings without a scene, jokes, and anything about the speaker themselves on camera.
+Choose moments where the speaker names or references something concrete and filmable: an object, a place, an activity, or a scene (for example "biking to work", "Mount Kilimanjaro", "a stack of cash", "writing a novel").
+Skip abstract ideas without a clear visual counterpart, jokes, and anything about the speaker themselves on camera.
 Never cover a moment where the speaker points at something the viewer is meant to see ("like this", "look at this", "here's what it looked like", "this slide"): the original picture is the payoff there.
 
 Rules:
@@ -787,8 +787,9 @@ def build_broll_plan_prompt(
     """Ask for cutaways over one clip's transcript (timestamps in clip seconds)."""
     return (
         f"Clip length: {clip_duration:.1f} seconds.\n"
-        f"Return at most {max_cues} cutaways. None may start before second "
-        f"{earliest_start:.1f} or run past second {max(0.0, clip_duration - 1):.1f}.\n\n"
+        f"Plan up to {max_cues} distinct cutaways distributed across the clip. "
+        f"Aim for multiple engaging cutaway moments to keep visual pacing dynamic. "
+        f"None may start before second {earliest_start:.1f} or run past second {max(0.0, clip_duration - 1):.1f}.\n\n"
         "Transcript, one line per phrase, prefixed with the clip second it starts at:\n"
         f"{timed_lines}"
     )

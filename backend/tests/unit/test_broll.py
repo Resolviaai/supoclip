@@ -184,7 +184,7 @@ def test_select_cues_limits_total_coverage():
 
 def test_max_cues_scales_with_clip_length():
     assert max_cues_for_duration(10) == 1
-    assert max_cues_for_duration(36) == 3
+    assert max_cues_for_duration(36) == 5
     assert max_cues_for_duration(90) == broll.MAX_CUES_PER_CLIP
 
 
