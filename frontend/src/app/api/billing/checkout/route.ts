@@ -20,9 +20,25 @@ import {
   subscriptionNeedsPayment,
 } from "@/lib/subscription-status";
 import type Stripe from "stripe";
+import { HOSTED_APP_URL } from "@/lib/site";
+import { pixPaymentMethodOptions } from "@/server/pix-mandate";
+
+// The Stripe account (Shiori LLC) also sells other products, so SupoClip's look is set per session
+// instead of in the account's branding settings. The icon comes from the hosted site so Stripe can
+// always fetch it, including from local and self-hosted checkouts.
+const CHECKOUT_BRANDING: Stripe.Checkout.SessionCreateParams.BrandingSettings = {
+  display_name: "SupoClip",
+  icon: { type: "url", url: `${HOSTED_APP_URL}/logo.png` },
+  button_color: "#eb5116",
+  background_color: "#ffffff",
+  font_family: "inter",
+  border_style: "rounded",
+};
 
 const APP_STORE_MANAGED_MESSAGE = "Your subscription is managed through the App Store";
 const PAID_SUBSCRIPTION_STATUSES = new Set(["active", "trialing"]);
+/** Stripe accepts 30 minutes to 24 hours. */
+const CHECKOUT_EXPIRES_AFTER_SECONDS = 60 * 60;
 
 export async function POST(request: Request) {
   if (!monetizationEnabled) {
@@ -216,6 +232,8 @@ export async function POST(request: Request) {
       .get("cookie")
       ?.match(/(?:^|;\s*)tilly_visitor_id=([^;]+)/)?.[1];
 
+    const paymentMethodOptions = await pixPaymentMethodOptions(stripe, priceId, interval);
+
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       ...checkoutTax,
@@ -231,9 +249,19 @@ export async function POST(request: Request) {
           : {}),
       },
       line_items: [{ price: priceId, quantity: 1 }],
+      // Creator commission follows the subscription after the discount ends.
+      ...(offer?.affiliateUserId
+        ? { subscription_data: { metadata: { userId: session.user.id, creator_code: offer.code } } }
+        : {}),
+      branding_settings: CHECKOUT_BRANDING,
+      ...(paymentMethodOptions ? { payment_method_options: paymentMethodOptions } : {}),
       ...(offer
         ? { discounts: [{ promotion_code: offer.promotionCodeId }] }
         : {}),
+      // An unfinished checkout (often a declined card) expires after an hour, and the
+      // checkout.session.expired webhook emails its recovery link while the intent is fresh.
+      expires_at: Math.floor(Date.now() / 1000) + CHECKOUT_EXPIRES_AFTER_SECONDS,
+      after_expiration: { recovery: { enabled: true } },
       success_url: `${appUrl}/settings?billing=success`,
       cancel_url: `${appUrl}/settings?billing=cancelled`,
     });

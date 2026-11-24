@@ -210,26 +210,48 @@ async def test_billing_summary_exposes_scheduled_cancellation():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "plan,status,provider,expected",
+    "plan,status,provider,expected,expected_bytes",
     [
-        ("pro", "active", None, 5400),
-        ("scale", "trialing", None, 10800),
-        ("scale", "inactive", None, 5400),
-        ("scale", "past_due", "stripe", 10800),
-        ("scale", "past_due", "apple", 5400),
-        ("scale", "unpaid", "stripe", 5400),
+        ("pro", "active", None, 7200, 60_000_000_000),
+        ("scale", "trialing", None, 10800, 90_000_000_000),
+        ("scale", "inactive", None, 5400, 4_000_000_000),
+        ("scale", "past_due", "stripe", 10800, 90_000_000_000),
+        ("scale", "past_due", "apple", 5400, 4_000_000_000),
+        ("scale", "unpaid", "stripe", 5400, 4_000_000_000),
     ],
 )
-async def test_billing_summary_exposes_enforced_duration_limit(plan, status, provider, expected):
+async def test_billing_summary_exposes_enforced_duration_limit(plan, status, provider, expected, expected_bytes):
     service = BillingService(_FakeSession([_billing_row(plan, status, provider=provider), _usage_row(0)]))
     service.config.monetization_enabled = True
+    service.config.max_video_duration = 5400
+    service.config.pro_youtube_max_video_duration = 7200
+    service.config.scale_youtube_max_video_duration = 10800
+    service.config.max_video_upload_bytes = 4_000_000_000
+    service.config.pro_max_video_upload_bytes = 60_000_000_000
+    service.config.scale_max_video_upload_bytes = 90_000_000_000
+    summary = await service.get_usage_summary("user-1")
+    assert summary["max_youtube_duration_seconds"] == expected
+    # Uploads follow the same per-video cap as links.
+    assert summary["max_upload_duration_seconds"] == expected
+    # The size cap follows the plan too, so the length limit is the one people meet.
+    assert summary["max_upload_bytes"] == expected_bytes
+
+
+@pytest.mark.asyncio
+async def test_billing_summary_has_no_duration_limit_when_self_hosted():
+    service = BillingService(_FakeSession([]))
+    service.config.self_host = True
+    service.config.monetization_enabled = False
     service.config.max_video_duration = 5400
     service.config.pro_youtube_max_video_duration = 5400
     service.config.scale_youtube_max_video_duration = 10800
     service.config.max_video_upload_bytes = 4_000_000_000
+
     summary = await service.get_usage_summary("user-1")
-    assert summary["max_youtube_duration_seconds"] == expected
-    assert summary["max_upload_duration_seconds"] == 5400
+
+    assert summary["plan"] == "self_host"
+    assert summary["max_youtube_duration_seconds"] is None
+    assert summary["max_upload_duration_seconds"] is None
     assert summary["max_upload_bytes"] == 4_000_000_000
 
 

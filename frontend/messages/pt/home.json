@@ -86,16 +86,16 @@
   },
   "cleanupTitle": "Limpeza do clipe",
   "cleanupBody": "Encurta os silêncios e corta sons de preenchimento na renderização.",
+  "cleanupMore": "Mais opções",
   "shortenPauses": "Encurtar pausas longas",
   "shortenPausesHint": "Corta silêncios maiores que isso até sobrar uma respiração curta",
   "pauseThreshold": "Limite da pausa (ms)",
-  "milliseconds": "milissegundos",
   "removeFillers": "Remover palavras de preenchimento",
   "removeFillersHint": "“um”, “uh”, “erm” e sons parecidos",
   "extraWords": "Palavras ou frases extras para cortar",
   "extraWordsPlaceholder": "basicamente, literalmente, sendo sincero",
   "generate": "Gerar clipes",
-  "limitNote": "{plan}: vídeos do YouTube de até {minutes} minutos. Cada vídeo usa sua duração em minutos, verificada antes de começar.",
+  "limitNote": "{plan}: vídeos de até {minutes} minutos cada, por link ou upload. Cada vídeo usa sua duração em minutos, verificada antes de começar.",
   "uploadLimits": "Envios de até {size}. Vídeos acima de 1080p ou 60 fps são reduzidos automaticamente, mantendo a proporção.",
   "completionEmails": "Os e-mails de conclusão seguem sua preferência em <settings>Configurações</settings>.",
   "recent": "Recentes",
@@ -129,7 +129,19 @@
     "remaining": "{count, plural, one {Resta # minuto de vídeo este mês} other {Restam # minutos de vídeo este mês}}",
     "nearWithPlan": "{refreshes} Precisa de mais espaço? O {plan} oferece {limit} de vídeo por mês.",
     "upgrade": "Fazer upgrade",
-    "limitTitleAll": "Você usou os minutos de vídeo deste mês"
+    "limitTitleAll": "Você usou os minutos de vídeo deste mês",
+    "teamStartTitle": "{team} não tem um plano Equipe ativo",
+    "teamStartOwner": "Ative-o nas configurações da equipe e toda a equipe poderá criar clipes.",
+    "teamStartMember": "Peça ao proprietário da equipe para ativar o plano Equipe.",
+    "teamSettings": "Configurações da equipe",
+    "memberPausedTitle": "Seu assento está pausado para novos vídeos",
+    "memberPausedBody": "Um administrador da equipe pausou a geração de vídeo para você. Peça para reativá-la.",
+    "teamLimitOwner": "{refreshes} Ou adicione assentos para ter mais horas compartilhadas.",
+    "teamLimitMember": "{refreshes} Ou peça ao proprietário da equipe para adicionar assentos.",
+    "manageSeats": "Adicionar assentos",
+    "memberLimitTitle": "Você usou seus {limit} minutos deste mês",
+    "memberLimitBody": "{refreshes} Um administrador da equipe pode aumentar seu limite.",
+    "memberNearBody": "{refreshes} Um administrador da equipe definiu seu limite em {limit} minutos por mês."
   },
   "clipLength": {
     "picker": "Duração do clipe",
@@ -344,6 +356,178 @@
       "strict": "Só o tema exato",
       "relaxed": "Permitidos",
       "question": "Uma pergunta"
+    }
+  },
+  "edits": {
+    "section": "Edição",
+    "title": "Intensidade da edição",
+    "body": "A IA marca os momentos que importam. Você escolhe com que força cada um bate.",
+    "intensity": {
+      "off": {
+        "label": "Desligada",
+        "hint": "Cortes limpos, nada adicionado"
+      },
+      "subtle": {
+        "label": "Sutil",
+        "hint": "Reenquadra de vez em quando, música baixa"
+      },
+      "bold": {
+        "label": "Forte",
+        "hint": "Aproximações nos momentos-chave, impactos nos cortes"
+      },
+      "max": {
+        "label": "Máxima",
+        "hint": "Reenquadres rápidos, impactos e música mais altos"
+      }
+    },
+    "offHint": "Ligue as edições para adicionar reenquadres, efeitos sonoros e música nos momentos que importam.",
+    "groups": {
+      "sound": "Som",
+      "motion": "Movimento",
+      "retention": "Prender a atenção"
+    },
+    "options": {
+      "sfx": {
+        "label": "Efeitos sonoros",
+        "hint": "Impactos e pops curtos em cortes e gráficos"
+      },
+      "music": {
+        "label": "Música",
+        "hint": "Uma trilha que abaixa quando a voz fala"
+      },
+      "musicMood": "Clima da música",
+      "zooms": {
+        "label": "Zooms",
+        "hint": "Reenquadres e aproximações curtas nos momentos-chave"
+      },
+      "shake": {
+        "label": "Tremida de câmera",
+        "hint": "Um tranco nos momentos mais fortes"
+      },
+      "transitions": {
+        "label": "Transições",
+        "hint": "Um flash ocasional onde o clipe corta"
+      },
+      "speed": {
+        "label": "Rampas de velocidade e congelamentos",
+        "hint": "Acelera a preparação e congela antes do desfecho"
+      },
+      "censor": {
+        "label": "Palavrões",
+        "hint": "Como os palavrões são cobertos"
+      },
+      "wait_for_it": {
+        "label": "Sticker “Espera…”",
+        "hint": "Antecipa um desfecho que está chegando"
+      },
+      "progress_bar": {
+        "label": "Barra de progresso",
+        "hint": "Uma barra fina na borda inferior"
+      },
+      "loop_ending": {
+        "label": "Final em loop",
+        "hint": "Funde o fim com o começo para repetir sem corte"
+      },
+      "reactions": {
+        "label": "Reações em GIF",
+        "hint": "Um GIF de reação nos momentos mais engraçados"
+      }
+    },
+    "moods": {
+      "auto": "Combinar com o vídeo",
+      "hype": "Empolgante",
+      "chill": "Tranquila",
+      "dramatic": "Dramática",
+      "funny": "Divertida",
+      "inspiring": "Inspiradora",
+      "dark": "Sombria",
+      "aggressive": "Agressiva"
+    },
+    "censor": {
+      "off": "Deixar como está",
+      "bleep": "Bipe",
+      "bleep_bar": "Bipe e cobrir a boca",
+      "bleep_pixelate": "Bipe e pixelar a boca"
+    },
+    "fineTune": "Ajuste fino"
+  },
+  "animatedCaptions": {
+    "title": "Animadas",
+    "demoLine": "Nossa receita cresceu 300% em apenas um ano",
+    "demoSticker": "Não acredito!",
+    "needsFace": "Melhor com um rosto na câmera",
+    "templates": {
+      "marker_circle": {
+        "name": "Círculo de marcador",
+        "description": "Círculos, sublinhados e setas à mão nas palavras-chave"
+      },
+      "emoji_drop": {
+        "name": "Emoji Drop",
+        "description": "As palavras aparecem conforme são ditas, com um emoji sob os grandes momentos"
+      },
+      "slam": {
+        "name": "Impacto",
+        "description": "Palavras-chave enormes batem na tela"
+      },
+      "behind_head": {
+        "name": "Atrás da Cabeça",
+        "description": "Uma palavra gigante aparece atrás de quem fala"
+      },
+      "stat_counter": {
+        "name": "Contador",
+        "description": "Números falados sobem e carimbam no lugar"
+      },
+      "kinetic_stack": {
+        "name": "Pilha cinética",
+        "description": "O gancho se empilha em linhas grossas"
+      },
+      "decode_glitch": {
+        "name": "Glitch decodificado",
+        "description": "As letras embaralham e se encaixam no lugar"
+      },
+      "highlighter_swipe": {
+        "name": "Marca-texto",
+        "description": "As palavras aparecem conforme são ditas; a palavra-chave entra numa caixa colorida"
+      },
+      "face_doodles": {
+        "name": "Rabiscos no rosto",
+        "description": "Brilhos, chifres e setas que seguem o rosto de quem fala"
+      }
+    }
+  },
+  "sourceRange": {
+    "start": "Início",
+    "end": "Fim",
+    "format": "Use h:mm:ss, como 1:30:00",
+    "first": "Primeiros {minutes} min",
+    "last": "Últimos {minutes} min",
+    "selected": "Vamos cortar {length}. Usa {minutes} minutos.",
+    "problems": {
+      "invalid": "Informe um horário de início e um de fim.",
+      "order": "O fim precisa vir depois do início.",
+      "outOfBounds": "Escolha horários entre 0:00 e {duration}.",
+      "tooShort": "Escolha pelo menos {min} minuto.",
+      "tooLong": "Escolha {max} minutos ou menos."
+    }
+  },
+  "tooLongPanel": {
+    "title": "Este vídeo de {runtime} passa do seu limite de {minutes} minutos",
+    "body": "Escolha uma parte de até {minutes} minutos e cortamos só ela. Só essa parte conta nos seus minutos.",
+    "bodyUpgrade": "Escolha uma parte de até {minutes} minutos e cortamos só ela, ou mude para o {plan} para vídeos de até {nextMinutes} minutos. Só a parte escolhida conta nos seus minutos.",
+    "submit": "Cortar esta parte",
+    "cancel": "Escolher outro vídeo",
+    "label": "Parte do vídeo para cortar",
+    "upgradeTo": "Mude para o {plan} (até {minutes} min por vídeo)",
+    "checkoutFailed": "O checkout não abriu. Tente de novo em instantes."
+  },
+  "lengthErrors": {
+    "durationUnavailable": {
+      "title": "Não conseguimos ler a duração deste vídeo",
+      "body": "Se for uma live que ainda está rolando, espere terminar e cole a gravação final. Se já terminou, tente de novo em um minuto. Nenhum minuto foi usado."
+    },
+    "tooLongNoRange": {
+      "title": "Este vídeo passa do seu limite de {minutes} minutos",
+      "body": "Ele é mais longo do que seu plano permite e não dá para escolher uma parte aqui. Use a gravação final ou um vídeo mais curto. Nenhum minuto foi usado."
     }
   }
 }

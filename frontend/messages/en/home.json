@@ -86,16 +86,16 @@
   },
   "cleanupTitle": "Clip cleanup",
   "cleanupBody": "Tighten dead air and cut filler sounds while rendering.",
+  "cleanupMore": "More options",
   "shortenPauses": "Shorten long pauses",
   "shortenPausesHint": "Trim silences longer than this down to a short breath",
   "pauseThreshold": "Pause threshold (ms)",
-  "milliseconds": "milliseconds",
   "removeFillers": "Remove filler words",
   "removeFillersHint": "“um”, “uh”, “erm” and similar sounds",
   "extraWords": "Extra words or phrases to cut",
   "extraWordsPlaceholder": "basically, literally, to be honest",
   "generate": "Generate clips",
-  "limitNote": "{plan}: YouTube, Twitch, and Kick videos up to {minutes} minutes. Each video uses its length in minutes, checked before we start.",
+  "limitNote": "{plan}: videos up to {minutes} minutes each, linked or uploaded. Each video uses its length in minutes, checked before we start.",
   "uploadLimits": "Uploads up to {size}. Videos above 1080p or 60 fps are scaled down automatically, keeping their shape.",
   "completionEmails": "Completion emails follow your preference in <settings>Settings</settings>.",
   "recent": "Recent",
@@ -129,7 +129,19 @@
     "remaining": "{count, plural, one {# minute of video left this month} other {# minutes of video left this month}}",
     "nearWithPlan": "{refreshes} Need more room? {plan} gives you {limit} of video a month.",
     "upgrade": "Upgrade",
-    "limitTitleAll": "You've used this month's video minutes"
+    "limitTitleAll": "You've used this month's video minutes",
+    "teamStartTitle": "{team} doesn't have an active Team plan",
+    "teamStartOwner": "Start it in team settings and everyone on the team can make clips.",
+    "teamStartMember": "Ask the team owner to start the Team plan.",
+    "teamSettings": "Team settings",
+    "memberPausedTitle": "Your seat is paused for new videos",
+    "memberPausedBody": "A team admin paused video generation for you. Ask them to turn it back on.",
+    "teamLimitOwner": "{refreshes} Or add seats for more shared hours.",
+    "teamLimitMember": "{refreshes} Or ask the team owner to add seats.",
+    "manageSeats": "Add seats",
+    "memberLimitTitle": "You've used your {limit} minutes for this month",
+    "memberLimitBody": "{refreshes} A team admin can raise your limit.",
+    "memberNearBody": "{refreshes} A team admin set your limit to {limit} minutes a month."
   },
   "clipLength": {
     "picker": "Clip length",
@@ -344,6 +356,178 @@
       "strict": "Exact topic only",
       "relaxed": "Allowed",
       "question": "A question"
+    }
+  },
+  "edits": {
+    "section": "Edits",
+    "title": "Edit intensity",
+    "body": "The AI tags the moments that matter. You pick how hard each one hits.",
+    "intensity": {
+      "off": {
+        "label": "Off",
+        "hint": "Clean cuts, nothing added"
+      },
+      "subtle": {
+        "label": "Subtle",
+        "hint": "Reframes now and then, a quiet music bed"
+      },
+      "bold": {
+        "label": "Bold",
+        "hint": "Punch-ins on the key moments, hits on cuts"
+      },
+      "max": {
+        "label": "Max",
+        "hint": "Fast reframes, louder hits and music"
+      }
+    },
+    "offHint": "Turn edits on to add reframes, sound effects and music on the moments that matter.",
+    "groups": {
+      "sound": "Sound",
+      "motion": "Motion",
+      "retention": "Keep them watching"
+    },
+    "options": {
+      "sfx": {
+        "label": "Sound effects",
+        "hint": "Short hits and pops on cuts and graphics"
+      },
+      "music": {
+        "label": "Music",
+        "hint": "A bed that ducks under the voice"
+      },
+      "musicMood": "Music mood",
+      "zooms": {
+        "label": "Zooms",
+        "hint": "Reframes and short pushes on the key moments"
+      },
+      "shake": {
+        "label": "Camera shake",
+        "hint": "A jolt on the hardest hits"
+      },
+      "transitions": {
+        "label": "Transitions",
+        "hint": "A rare flash where the clip cuts"
+      },
+      "speed": {
+        "label": "Speed ramps and freezes",
+        "hint": "Speed through set-ups, freeze before a payoff"
+      },
+      "censor": {
+        "label": "Swearing",
+        "hint": "How bad words are covered"
+      },
+      "wait_for_it": {
+        "label": "“Wait for it” sticker",
+        "hint": "Teases a payoff that's coming"
+      },
+      "progress_bar": {
+        "label": "Progress bar",
+        "hint": "A thin bar along the bottom edge"
+      },
+      "loop_ending": {
+        "label": "Loop ending",
+        "hint": "Fades the end into the start so it replays smoothly"
+      },
+      "reactions": {
+        "label": "GIF reactions",
+        "hint": "A reaction GIF on the funniest moments"
+      }
+    },
+    "moods": {
+      "auto": "Match the video",
+      "hype": "Hype",
+      "chill": "Chill",
+      "dramatic": "Dramatic",
+      "funny": "Funny",
+      "inspiring": "Inspiring",
+      "dark": "Dark",
+      "aggressive": "Aggressive"
+    },
+    "censor": {
+      "off": "Leave as is",
+      "bleep": "Bleep",
+      "bleep_bar": "Bleep and cover mouth",
+      "bleep_pixelate": "Bleep and pixelate mouth"
+    },
+    "fineTune": "Fine-tune"
+  },
+  "animatedCaptions": {
+    "title": "Animated",
+    "demoLine": "Our revenue grew 300% in just one year",
+    "demoSticker": "No way!",
+    "needsFace": "Best with a face on camera",
+    "templates": {
+      "marker_circle": {
+        "name": "Marker Circle",
+        "description": "Hand-drawn circles, underlines and arrows on the key words"
+      },
+      "emoji_drop": {
+        "name": "Emoji Drop",
+        "description": "Words appear as they’re spoken, with an emoji under the big moments"
+      },
+      "slam": {
+        "name": "Slam",
+        "description": "Huge keywords slam onto the screen"
+      },
+      "behind_head": {
+        "name": "Behind Head",
+        "description": "One giant word appears behind the speaker"
+      },
+      "stat_counter": {
+        "name": "Stat Counter",
+        "description": "Spoken numbers count up and stamp into place"
+      },
+      "kinetic_stack": {
+        "name": "Kinetic Stack",
+        "description": "The hook stacks up the screen in bold rows"
+      },
+      "decode_glitch": {
+        "name": "Decode Glitch",
+        "description": "Letters scramble and lock into place"
+      },
+      "highlighter_swipe": {
+        "name": "Highlighter",
+        "description": "Words appear as they’re spoken; the key word lands in a solid box"
+      },
+      "face_doodles": {
+        "name": "Face Doodles",
+        "description": "Sparkles, horns and arrows that follow the speaker's face"
+      }
+    }
+  },
+  "sourceRange": {
+    "start": "Start",
+    "end": "End",
+    "format": "Use h:mm:ss, like 1:30:00",
+    "first": "First {minutes} min",
+    "last": "Last {minutes} min",
+    "selected": "Clipping {length}. Uses {minutes} minutes.",
+    "problems": {
+      "invalid": "Enter a start and an end time.",
+      "order": "The end has to come after the start.",
+      "outOfBounds": "Pick times between 0:00 and {duration}.",
+      "tooShort": "Pick at least {min} minute.",
+      "tooLong": "Pick {max} minutes or less."
+    }
+  },
+  "tooLongPanel": {
+    "title": "This {runtime} video is over your {minutes}-minute limit",
+    "body": "Pick a part up to {minutes} minutes and we'll clip just that. Only that part counts toward your minutes.",
+    "bodyUpgrade": "Pick a part up to {minutes} minutes and we'll clip just that, or upgrade to {plan} for videos up to {nextMinutes} minutes. Only the part you pick counts toward your minutes.",
+    "submit": "Clip this part",
+    "cancel": "Choose another video",
+    "label": "Part of the video to clip",
+    "upgradeTo": "Upgrade to {plan} (up to {minutes} min per video)",
+    "checkoutFailed": "Checkout didn't open. Try again in a moment."
+  },
+  "lengthErrors": {
+    "durationUnavailable": {
+      "title": "We couldn't read this video's length",
+      "body": "If it's a livestream that's still going, wait until it ends and paste the finished recording. If it has already ended, try again in a minute. No minutes were used."
+    },
+    "tooLongNoRange": {
+      "title": "This video is over your {minutes}-minute limit",
+      "body": "It's longer than your plan allows, and part of it can't be picked here. Try the finished recording or a shorter video. No minutes were used."
     }
   }
 }

@@ -17,8 +17,8 @@
       "featureCrop": "Recorte vertical 9:16 centrado en el rostro",
       "featureCaptions": "Subtítulos animados sincronizados por palabra",
       "featureExports": "Exportaciones para YouTube Shorts, TikTok e Instagram Reels",
-      "featureSelfHost": "Autoalojamiento para fines no comerciales",
-      "offerCategory": "Código fuente para autoalojamiento no comercial",
+      "featureSelfHost": "Autoalojamiento gratis para fines no comerciales y creadores individuales",
+      "offerCategory": "Código fuente para autoalojamiento no comercial y de creadores individuales",
       "ios": "La app de SupoClip para iOS: convierte videos largos en shorts verticales con subtítulos desde tu iPhone.",
       "website": "Recorte de video con IA de código abierto para contenido de formato corto."
     }
@@ -36,7 +36,7 @@
   },
   "footer": {
     "tagline": "Recortador de video con IA de código abierto. Usa la app alojada o ejecútala en tu propia infraestructura.",
-    "licenseNotice": "El uso comercial, incluido el uso interno en empresas, requiere <license>autorización por escrito</license>.",
+    "licenseNotice": "Los creadores individuales pueden autoalojar y monetizar gratis. Las empresas, las agencias y el alojamiento de pago requieren <license>autorización por escrito</license>.",
     "github": "GitHub",
     "ios": "App para iOS",
     "discord": "Comunidad de Discord",
@@ -46,7 +46,7 @@
       "product": "Producto"
     },
     "columnLinks": "Enlaces de {heading}",
-    "operator": "Un producto de {company}."
+    "operator": "SupoClip es operado por {company}."
   },
   "creator": {
     "codeLead": "Código",
@@ -97,6 +97,18 @@
       "title": "Autoaloja SupoClip con Docker Compose",
       "description": "Requisitos, variables de entorno, primer arranque, una instalación local completa y revisiones de producción."
     },
+    "blog_supoclip_vs_opusclip_klap_vizard": {
+      "eyebrow": "Comparison",
+      "title": "SupoClip vs OpusClip vs Klap vs Vizard",
+      "label": "SupoClip vs OpusClip, Klap, Vizard",
+      "description": "Free plans, price per hour or clip, exports and publishing across four AI clippers."
+    },
+    "blog_free_opusclip_alternatives": {
+      "eyebrow": "Comparison",
+      "title": "Best free OpusClip alternatives",
+      "label": "Free OpusClip alternatives",
+      "description": "What the free tiers of hosted clippers include, and open-source tools with no watermark."
+    },
     "blog_supoclip_vs_opusclip": {
       "label": "SupoClip vs OpusClip",
       "eyebrow": "Comparación",
@@ -140,28 +152,28 @@
       "label": "Novedades"
     },
     "blog_podcast_to_shorts": {
-      "eyebrow": "Podcast clips",
-      "title": "Turn a video podcast into Shorts and Reels",
-      "label": "Podcast to Shorts",
-      "description": "Choose complete ideas, correct captions, and follow real clips back to the source."
+      "eyebrow": "Clips de pódcast",
+      "title": "Convierte un videopódcast en Shorts y Reels",
+      "label": "Pódcast a Shorts",
+      "description": "Elige ideas completas, corrige subtítulos y compara clips reales con la grabación original."
     },
     "blog_find_best_moments_in_video": {
-      "eyebrow": "Highlight selection",
-      "title": "Find the best moments in a long video",
-      "label": "Find video highlights",
-      "description": "Use a practical checklist for hooks, context, payoff, and clean boundaries."
+      "eyebrow": "Selección de momentos",
+      "title": "Encuentra los mejores momentos en un video largo",
+      "label": "Encontrar mejores momentos",
+      "description": "Usa una lista práctica para gancho, contexto, remate y cortes limpios."
     },
     "blog_twitch_vod_to_shorts": {
-      "eyebrow": "Stream clips",
-      "title": "Turn Twitch VODs into TikTok clips and Shorts",
-      "label": "Twitch VOD to Shorts",
-      "description": "Review spoken highlights, preserve gameplay context, and export vertical clips."
+      "eyebrow": "Clips de streams",
+      "title": "Convierte VODs de Twitch en clips para TikTok y Shorts",
+      "label": "VOD de Twitch a Shorts",
+      "description": "Revisa momentos hablados, conserva el contexto del gameplay y exporta clips verticales."
     },
     "blog_how_to_clip_gta_6": {
       "eyebrow": "Clips de GTA 6",
       "title": "Cómo hacer clips de GTA 6",
       "label": "Clips de GTA 6",
-      "description": "Lo que pagan las campañas de clipping, las reglas de Rockstar y el flujo del VOD al clip vertical."
+      "description": "Lo que pagan las campañas de clipping, las reglas de Rockstar Games y el flujo del VOD al clip vertical."
     },
     "blog_repurpose_webinar_clips": {
       "eyebrow": "Webinar repurposing",
@@ -170,10 +182,10 @@
       "description": "Turn audience questions and useful answers into clips with readable slides and captions."
     },
     "blog_word_by_word_video_captions": {
-      "eyebrow": "Caption editing",
-      "title": "Add readable word-by-word captions to clips",
-      "label": "Word-by-word captions",
-      "description": "Correct the transcript, choose a style, and keep subtitles clear of platform controls."
+      "eyebrow": "Edición de subtítulos",
+      "title": "Agrega subtítulos palabra por palabra legibles a tus clips",
+      "label": "Subtítulos palabra por palabra",
+      "description": "Corrige la transcripción, elige un estilo y mantén los subtítulos lejos de los controles de cada app."
     },
     "blog_schedule_week_of_youtube_shorts": {
       "eyebrow": "Publishing workflow",
@@ -189,6 +201,9 @@
     },
     "faq": {
       "label": "Preguntas frecuentes"
+    },
+    "examples": {
+      "label": "Clips de ejemplo"
     }
   },
   "nav": {
@@ -205,7 +220,8 @@
     "openHosted": "Abrir la app alojada",
     "toggleMenu": "Abrir o cerrar el menú",
     "publishing": "Publicación",
-    "faq": "Preguntas frecuentes"
+    "faq": "Preguntas frecuentes",
+    "examples": "Ejemplos"
   },
   "hero": {
     "badge": "Código abierto y autoalojable. También en iPhone.",
@@ -316,6 +332,61 @@
         "description": "Exporta con un clic para Shorts, TikTok y Reels, con B-roll de stock cuando un clip lo necesite."
       }
     }
+  },
+  "dynamicEdits": {
+    "eyebrow": "Ediciones dinámicas",
+    "title": "Clips que parecen editados por un profesional",
+    "body": "Elige una intensidad de edición. La IA encuentra los momentos que importan y los remata con subtítulos, acercamientos, sonido y música. El mismo clip, cuatro estilos: cambia mientras se reproduce.",
+    "switcherLabel": "Intensidad de edición",
+    "intensity": {
+      "off": {
+        "label": "Desactivada",
+        "description": "Cortes limpios y tus subtítulos de siempre, sin nada añadido."
+      },
+      "subtle": {
+        "label": "Sutil",
+        "description": "Un aire de clip de pódcast: un reencuadre de vez en cuando sobre una música suave."
+      },
+      "bold": {
+        "label": "Marcada",
+        "description": "Acercamientos al estilo Hormozi que se mantienen, subtítulos palabra por palabra con la palabra clave resaltada y algún golpe en un corte."
+      },
+      "max": {
+        "label": "Máxima",
+        "description": "Subtítulos contundentes al estilo MrBeast, más reencuadres y zooms, destellos en los cortes, efectos de sonido y música de fondo."
+      }
+    },
+    "player": {
+      "label": "Clip en {intensity}",
+      "play": "Reproducir",
+      "pause": "Pausar",
+      "mute": "Silenciar",
+      "unmute": "Activar sonido",
+      "tapForSound": "Toca para oír"
+    },
+    "broll": {
+      "title": "En Máxima, con b-roll",
+      "caption": "Los planos de recurso del propio episodio llenan el formato vertical en lugar de encogerse en una franja, con los subtítulos, los golpes y la música por encima."
+    },
+    "points": {
+      "captions": {
+        "title": "Subtítulos que caen palabra por palabra",
+        "description": "Los estilos animados enmarcan la palabra clave, sueltan un emoji o colocan una palabra detrás de la cabeza de quien habla. Las palabrotas se pitan y se muestran como f***."
+      },
+      "motion": {
+        "title": "Acercamientos y reencuadres al ritmo",
+        "description": "La IA elige las frases que importan y la imagen se acerca, corta más cerca o destella justo en ellas."
+      },
+      "sound": {
+        "title": "Sonido y música bajo la voz",
+        "description": "Golpes en los cortes y música de fondo según el tono del clip, de relajada a agresiva, mezclada bajo cada palabra."
+      },
+      "studio": {
+        "title": "Todo sigue siendo editable",
+        "description": "Cambia la intensidad de los clips que ya tienes o ajusta un solo efecto en el estudio de clips."
+      }
+    },
+    "source": "SupoClip creó ambos clips a partir de <link>{title}</link>."
   },
   "editor": {
     "eyebrow": "Editor",
@@ -440,7 +511,28 @@
     },
     "publishPlatforms": "Publica clips en YouTube Shorts y TikTok",
     "schedulingPlatforms": "Programa clips en YouTube Shorts y TikTok",
-    "schedulingSoon": "Programación en Instagram"
+    "schedulingSoon": "Programación en Instagram",
+    "team": {
+      "badge": "Equipos y Agencias",
+      "description": "Para equipos de edición, agencias y creadores con editores.",
+      "seatAddon": "Incluye {seats} puestos · +${price}/puesto extra (+{hours} h)",
+      "seatsLabel": "{count} puestos",
+      "decreaseSeats": "Reducir puestos",
+      "increaseSeats": "Aumentar puestos",
+      "cta": "Crear un equipo",
+      "features": {
+        "pooledHours": "{hours} horas compartidas de video/mes",
+        "seats": "{seats} puestos con biblioteca compartida",
+        "quality": "Clips Full HD {resolution} · vídeos de hasta {hours} h",
+        "sharedWorkspace": "Programación social y {aiEdits} ediciones IA/mes",
+        "roles": "Roles de Propietario, Admin y Miembro + mayor concurrencia",
+        "aiEdits": "{aiEdits} ediciones IA compartidas/mes"
+      }
+    },
+    "limits": {
+      "monthly": "Video al mes",
+      "perVideo": "Duración máx. por video"
+    }
   },
   "faq": {
     "eyebrow": "Preguntas frecuentes",
@@ -457,7 +549,7 @@
       },
       "minutes": {
         "question": "¿Cómo se cuentan los minutos?",
-        "answer": "Los planes se miden en minutos de video original, no en clips. Pro incluye {proHours} horas al mes y Creator {creatorHours} horas. Un video de 30 minutos usa 30 minutos, salgan los clips que salgan. El saldo se renueva cada mes, también en los planes anuales."
+        "answer": "Los planes se miden en minutos de video original, no en clips. Pro incluye {proHours} horas al mes y Creator {creatorHours} horas. Un video de 30 minutos usa 30 minutos, salgan los clips que salgan. El saldo se renueva cada mes, también en los planes anuales. Cada video puede durar hasta {proMinutes} minutos en Pro y {creatorMinutes} minutos en Creator."
       },
       "publishing": {
         "question": "¿SupoClip puede publicar en TikTok e Instagram?",
@@ -473,7 +565,7 @@
       },
       "selfHost": {
         "question": "¿De verdad es gratis autoalojarlo?",
-        "answer": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales. El uso comercial requiere la autorización previa por escrito de Shiori LLC."
+        "answer": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales, y los creadores individuales pueden autoalojarlo para hacer clips para sus propios canales monetizados. Las empresas, las agencias, el trabajo para clientes y el alojamiento de pago requieren la autorización previa por escrito de Shiori LLC."
       },
       "cancel": {
         "question": "¿Puedo cancelar cuando quiera?",
@@ -484,11 +576,11 @@
   "openSource": {
     "badge": "Licencia de código fuente no comercial de SupoClip",
     "title": "Hecho en público",
-    "body": "Código fuente para autoalojamiento no comercial",
+    "body": "Código fuente para autoalojamiento no comercial y de creadores individuales",
     "commandLabel": "autoalojar",
     "comment": "# agrega un proveedor de transcripción y de LLM en .env",
     "facts": {
-      "license": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales. El uso comercial requiere la autorización previa por escrito de Shiori LLC.",
+      "license": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales, y los creadores individuales pueden autoalojarlo para hacer clips para sus propios canales monetizados. Las empresas, las agencias, el trabajo para clientes y el alojamiento de pago requieren la autorización previa por escrito de Shiori LLC.",
       "docker": "Un solo comando de Docker Compose para ejecutarlo tú mismo",
       "models": "Usa tus propios modelos: Gemini, OpenAI, Anthropic u Ollama"
     },

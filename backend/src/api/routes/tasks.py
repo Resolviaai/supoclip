@@ -4,7 +4,7 @@ Task API routes using refactored architecture.
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from ...media_storage import MediaStorage, STORAGE_ERRORS, is_s3, media_work
 from sqlalchemy.exc import TimeoutError as PoolTimeout
@@ -18,6 +18,7 @@ from typing import Dict, Any, Optional
 import inspect
 import re
 import secrets
+import subprocess
 import math
 import asyncio
 from datetime import datetime, timezone
@@ -38,13 +39,33 @@ from ...repositories.task_idempotency_repository import (
 from ...database import get_db
 from ...database import AsyncSessionLocal
 from ...services.task_service import TaskService
+from ...services.fx_clip_jobs import stale_job_error
 from ...services.video_service import VideoService
 from ...media.upload_ingest import foreign_upload
 from ...repositories.upload_repository import get_stored_upload
 from ...services.billing_service import BillingService, BillingLimitExceeded
-from ...auth_headers import resolve_authenticated_user_id
+from ...auth_headers import AuthContext, resolve_auth_context, resolve_authenticated_user_id
+from ...repositories.team_repository import TeamRepository
 from ...analytics import capture_clip_export, capture_event, request_client, source_kind
-from ...feature_flags import client_platform
+from ...feature_flags import DYNAMIC_EDITS, client_platform, is_enabled as feature_enabled
+from ...edit_fx.contracts import EditStyle, GRADES, INTENSITIES, LISTED_FX_CAPTION_TEMPLATES, MOODS, is_fx_template
+from ...edit_fx.jobs import fx_active
+from ...edit_fx.settings import EditStyleError, edit_style_schema, parse_edit_style, read_edit_style
+from ...services.clip_service import (
+    FX_CLIP_JOB_STATUSES,
+    FxClipJobInProgress,
+    FxClipJobQueueError,
+    FxClipJobRequest,
+    QueuedClipJob,
+    clip_has_fx,
+    FX_CLIP_JOB_CLOSED,
+    FX_CLIP_JOB_QUEUE_TIMEOUT_SECONDS,
+    claim_fx_clip_job,
+    enqueue_fx_clip_job,
+    release_fx_clip_job_marker,
+    write_fx_clip_job_state,
+    read_fx_clip_job_state,
+)
 from ...source_identity import (
     duplicate_source_response,
     source_admission_lock,
@@ -85,8 +106,42 @@ from ...workflows.options import (
 import redis.asyncio as redis
 from ...clip_editor import export_with_preset, EXPORT_PRESETS
 
+from ...source_range import (
+    METADATA_KEY as SOURCE_RANGE_KEY,
+    SourceRangeError,
+    parse_requested_range,
+    resolve_source_range,
+    video_too_long_detail,
+    workflow_supports_range,
+)
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+DYNAMIC_EDITS_NOT_AVAILABLE_MESSAGE = "Dynamic edits aren't available on your account yet."
+
+
+def _invalid_edit_style(exc: EditStyleError) -> HTTPException:
+    """422 ``INVALID_EDIT_STYLE``, raised before any charge (same envelope as ``WORKFLOW_NOT_AVAILABLE``)."""
+    return HTTPException(status_code=422, detail={"code": "INVALID_EDIT_STYLE", "message": str(exc)})
+
+
+def _dynamic_edits_not_available() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail={"code": "DYNAMIC_EDITS_NOT_AVAILABLE", "message": DYNAMIC_EDITS_NOT_AVAILABLE_MESSAGE},
+    )
+
+
+async def _dynamic_edits_enabled(db, request: Request, user_id: str) -> bool:
+    return await feature_enabled(db, DYNAMIC_EDITS, platform=client_platform(request), user_id=user_id)
+
+
+def _reactions_available() -> bool:
+    """GIF/meme inserts can be offered: a provider and its key are configured."""
+    from ...edit_fx.reactions import reactions_available
+
+    return reactions_available()
 
 
 class _DurationUnavailable(Exception):
@@ -110,8 +165,12 @@ def _duration_unavailable_error(platform: str) -> HTTPException:
     )
 
 
-async def _preflight_youtube_source(url: str, duration_limit: int) -> Dict[str, Any]:
-    """Check duration before creating a task or consuming a generation."""
+async def _preflight_youtube_source(url: str, duration_limit: Optional[int]) -> Dict[str, Any]:
+    """Check duration before creating a task or consuming a generation.
+
+    ``duration_limit`` None skips the whole-video check (either self-hosted with
+    no cap, or a part was picked and its length is checked once known).
+    """
     # wait_for cancels the awaiting task when this elapses. A yt-dlp call already
     # running inside asyncio.to_thread can finish in the background.
     timeout_seconds = get_config().youtube_preflight_timeout_seconds
@@ -172,23 +231,11 @@ async def _preflight_youtube_source(url: str, duration_limit: int) -> Dict[str, 
             },
         ) from None
 
-    if duration > duration_limit:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "VIDEO_TOO_LONG",
-                "message": (
-                    f"This video is {duration / 60:.1f} minutes long. Your plan allows "
-                    f"YouTube videos up to {duration_limit / 60:g} minutes. "
-                    "Choose a shorter video. No minutes were used."
-                ),
-                "duration_seconds": duration,
-                "max_duration_seconds": duration_limit,
-            },
-        )
+    if duration_limit is not None and duration_limit > 0 and duration > duration_limit:
+        raise HTTPException(status_code=422, detail=video_too_long_detail(duration, duration_limit))
     return metadata
 
-async def _preflight_stream_source(url: str, source: str, duration_limit: int) -> Dict[str, Any]:
+async def _preflight_stream_source(url: str, source: str, duration_limit: Optional[int]) -> Dict[str, Any]:
     try:
         # One overall deadline: yt-dlp (proxy, direct) metadata, then the cheap
         # metadata actor only when both fail. The full-video actor never runs
@@ -206,8 +253,8 @@ async def _preflight_stream_source(url: str, source: str, duration_limit: int) -
         raise HTTPException(status_code=422, detail={"code": "VIDEO_UNAVAILABLE", "message": str(exc)}) from None
     except Exception:
         raise HTTPException(status_code=503, detail={"code": "VIDEO_METADATA_UNAVAILABLE", "message": "We couldn't fetch this video, try again later. No minutes were used."}) from None
-    if duration > duration_limit:
-        raise HTTPException(status_code=422, detail={"code": "VIDEO_TOO_LONG", "message": f"This {source.title()} video is {duration / 60:.1f} minutes long. Your plan allows videos up to {duration_limit / 60:g} minutes. Choose a shorter VOD or clip. No minutes were used.", "duration_seconds": duration, "max_duration_seconds": duration_limit})
+    if duration_limit is not None and duration_limit > 0 and duration > duration_limit:
+        raise HTTPException(status_code=422, detail=video_too_long_detail(duration, duration_limit, platform=source.title()))
     return metadata
 
 
@@ -224,7 +271,7 @@ def _stream_resolution_metadata(metadata: Dict[str, Any] | None) -> Dict[str, An
     }
 
 
-async def _preflight_upload_source(url: str, user_id: str, duration_limit: int, db=None) -> float:
+async def _preflight_upload_source(url: str, user_id: str, duration_limit: Optional[int], db=None) -> float:
     """Read an uploaded video's length so its minutes are charged up front."""
     reference = None
     if db is not None and isinstance(url, str) and url.startswith("upload://") and not url.startswith("upload://s3/"):
@@ -237,6 +284,18 @@ async def _preflight_upload_source(url: str, user_id: str, duration_limit: int, 
             duration = await run_in_thread(VideoService.probe_upload_duration, url, user_id)
         if not math.isfinite(duration) or duration <= 0:
             raise ValueError("Invalid video duration")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VIDEO_PROBE_TIMEOUT",
+                "message": (
+                    "This video took too long to read. Re-export it with fast start "
+                    "(\"optimize for web\") turned on, or upload a shorter or smaller "
+                    "file. No minutes were used."
+                ),
+            },
+        ) from None
     except Exception:
         raise HTTPException(
             status_code=422,
@@ -249,19 +308,8 @@ async def _preflight_upload_source(url: str, user_id: str, duration_limit: int, 
             },
         ) from None
 
-    if duration > duration_limit:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "VIDEO_TOO_LONG",
-                "message": (
-                    f"This video is {duration / 60:.1f} minutes long. Uploads can be "
-                    f"up to {duration_limit / 60:g} minutes. No minutes were used."
-                ),
-                "duration_seconds": duration,
-                "max_duration_seconds": duration_limit,
-            },
-        )
+    if duration_limit is not None and duration_limit > 0 and duration > duration_limit:
+        raise HTTPException(status_code=422, detail=video_too_long_detail(duration, duration_limit, upload=True))
     return duration
 
 
@@ -309,10 +357,23 @@ def _finite_number(value: Any, name: str) -> float:
     return number
 
 
-async def _get_user_id_from_headers(request: Request, db: AsyncSession) -> str:
+async def _default_get_user_id_from_headers(request: Request, db: AsyncSession) -> str:
     """Resolve the authenticated user ID from an API key or signed frontend headers."""
     config = get_config()
     return await resolve_authenticated_user_id(request, db, config)
+
+
+_get_user_id_from_headers = _default_get_user_id_from_headers
+
+
+async def _get_auth_context(request: Request, db: AsyncSession) -> AuthContext:
+    """Resolve authenticated user + verified team membership (if team header/key present)."""
+    # Preserve test monkeypatching of `_get_user_id_from_headers`.
+    if _get_user_id_from_headers is not _default_get_user_id_from_headers:
+        user_id = await _get_user_id_from_headers(request, db)
+        return AuthContext(user_id=user_id, team_id=None)
+    config = get_config()
+    return await resolve_auth_context(request, db, config)
 
 
 async def _load_task_source_metadata(task_id: str, db: AsyncSession | None = None) -> Dict[str, Any]:
@@ -401,37 +462,68 @@ ADMIN_READABLE_TASK_STATUSES = {"queued", "processing", "pending"}
 async def _load_task_for_user(
     request: Request, task_service: TaskService, db: AsyncSession, task_id: str
 ):
-    user_id = await _get_user_id_from_headers(request, db)
+    auth_ctx = await _get_auth_context(request, db)
     task = await task_service.task_repo.get_task_by_id(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return user_id, task
+    return auth_ctx, task
+
+
+async def _can_access_task(
+    auth_ctx: AuthContext, db: AsyncSession, task: Dict[str, Any]
+) -> bool:
+    """Strict tenant isolation for personal and team-scoped tasks."""
+    task_team_id = task.get("team_id")
+    if task_team_id:
+        # A team-scoped API key may only access tasks in its own team.
+        if auth_ctx.via_api_key and auth_ctx.team_id != task_team_id:
+            return False
+        if auth_ctx.team_id == task_team_id:
+            return True
+        return await TeamRepository.is_member(db, task_team_id, auth_ctx.user_id)
+
+    # Personal task: never accessible via a team-scoped API key, and only by owner.
+    if auth_ctx.via_api_key and auth_ctx.team_id is not None:
+        return False
+    return task.get("user_id") == auth_ctx.user_id
+
+
+async def _require_task_access(
+    request: Request, task_service: TaskService, db: AsyncSession, task_id: str
+) -> tuple[AuthContext, Dict[str, Any]]:
+    """The caller and a task they own or reach through its team. Returns (caller, task).
+
+    In a team the caller is not always the task's creator; whatever is metered
+    per member is charged to the caller.
+    """
+    auth_ctx, task = await _load_task_for_user(request, task_service, db, task_id)
+
+    if not await _can_access_task(auth_ctx, db, task):
+        raise HTTPException(status_code=403, detail="Not authorized for this task")
+
+    return auth_ctx, task
 
 
 async def _require_task_owner(
     request: Request, task_service: TaskService, db: AsyncSession, task_id: str
 ):
-    """Ensure authenticated user owns the task."""
-    user_id, task = await _load_task_for_user(request, task_service, db, task_id)
-
-    if task.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized for this task")
-
+    """Ensure authenticated user owns the task or actively belongs to its team."""
+    _auth_ctx, task = await _require_task_access(request, task_service, db, task_id)
     return task
 
 
 async def _authorize_task_reader(
     request: Request, task_service: TaskService, db: AsyncSession, task_id: str
 ):
-    """Owner, or an admin reading a task that is still active. Returns (user_id, task)."""
-    user_id, task = await _load_task_for_user(request, task_service, db, task_id)
+    """Owner/teammate, or an admin reading a task that is still active. Returns (user_id, task)."""
+    auth_ctx, task = await _load_task_for_user(request, task_service, db, task_id)
 
-    if task.get("user_id") == user_id:
-        return user_id, task
+    if await _can_access_task(auth_ctx, db, task):
+        return auth_ctx.user_id, task
     if task.get("status") in ADMIN_READABLE_TASK_STATUSES and await user_is_admin(
-        db, user_id
+        db, auth_ctx.user_id
     ):
-        return user_id, task
+        return auth_ctx.user_id, task
 
     raise HTTPException(status_code=403, detail="Not authorized for this task")
 
@@ -537,15 +629,17 @@ async def list_tasks(
     request: Request, db: AsyncSession = Depends(get_db), limit: int = 50
 ):
     """
-    Get all tasks for the authenticated user.
+    Get all tasks for the authenticated user's active workspace (personal or team).
     """
-    user_id = await _get_user_id_from_headers(request, db)
+    auth_ctx = await _get_auth_context(request, db)
 
     try:
         task_service = TaskService(db)
-        tasks = await task_service.get_user_tasks(user_id, limit)
+        tasks = await task_service.get_user_tasks(
+            auth_ctx.user_id, limit, team_id=auth_ctx.team_id
+        )
 
-        return {"tasks": tasks, "total": len(tasks)}
+        return {"tasks": tasks, "total": len(tasks), "team_id": auth_ctx.team_id}
 
     except Exception as e:
         logger.error(f"Error retrieving user tasks: {e}")
@@ -647,7 +741,13 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
         attempt.note_url(raw_source.get("url"))
     if not isinstance(raw_source, dict) or not isinstance(raw_source.get("url"), str) or not raw_source["url"].strip():
         raise HTTPException(status_code=400, detail="Source URL is required")
-    user_id = await _get_user_id_from_headers(request, db)
+    try:
+        requested_range = parse_requested_range(raw_source)
+    except SourceRangeError as exc:
+        raise HTTPException(status_code=422, detail=exc.to_detail()) from None
+    auth_ctx = await _get_auth_context(request, db)
+    user_id = auth_ctx.user_id
+    team_id = auth_ctx.team_id
     attempt.note_user(user_id)
     attempt.note_workflow(data.get("workflow"))
 
@@ -680,11 +780,30 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
         workflow_spec = parse_workflow_request(data, clip_length)
     except WorkflowRequestError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.to_detail()) from None
+    if requested_range is not None and not workflow_supports_range(workflow_spec.workflow):
+        raise HTTPException(status_code=422, detail=SourceRangeError(
+            "Picking a part of a video works with highlights. Choose highlights, or a shorter video."
+        ).to_detail())
     if not workflow_spec.legacy and not await workflow_allowed_for(
         db, user_id, workflow_spec.workflow, platform=client_platform(request)
     ):
         error = workflow_not_available()
         raise HTTPException(status_code=error.status, detail=error.to_detail())
+    # Dynamic edits are render-side, so any workflow takes them. A bad value is a
+    # 422 and a locked feature a 403, both before any charge. The stored form is
+    # to_json(): {} (stored as NULL) when the intensity is off.
+    try:
+        edit_style = parse_edit_style(data.get("edit_style"))
+    except EditStyleError as exc:
+        raise _invalid_edit_style(exc) from None
+    edit_style_json = edit_style.to_json()
+    fx_requested = fx_active(edit_style, caption_template)
+    if fx_requested and not await _dynamic_edits_enabled(db, request, user_id):
+        raise _dynamic_edits_not_available()
+    # With dynamic edits, an in-flight task for the same video is the same job only
+    # if it was made with the same style and caption template. Without them, an
+    # in-flight task that renders dynamic edits is never the same job (the lookup skips it).
+    edit_identity = {"edit_identity": (edit_style_json, caption_template or "default")} if fx_requested else {}
     workflow_options = workflow_spec.options.to_json()
     cleanup_settings = new_task_cleanup_settings(data)
     if not raw_source or not raw_source.get("url"):
@@ -708,6 +827,11 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
         # and instructions never leave the process.
         upload_options["workflow"] = workflow_spec.workflow
         upload_options["workflow_options"] = workflow_options
+    if edit_style_json:
+        upload_options["edit_style"] = edit_style_json
+    if requested_range is not None:
+        # Two parts of one upload are two jobs. Whole-video keys are unchanged.
+        upload_options["source_range"] = requested_range.key()
     upload_request_key = _upload_request_key(request, raw_source["url"], upload_options)
     # A keyed request answers with the task the key made, however long ago
     # within retention. Unkeyed upload retries keep the short-window dedupe.
@@ -717,7 +841,9 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
         if replay is not None:
             return replay
     if upload_request_key and db is not None:
-        existing = await TaskRepository.find_recent_upload_task(db, user_id, upload_request_key)
+        existing = await TaskRepository.find_recent_upload_task(
+            db, user_id, upload_request_key, team_id=team_id
+        )
         if existing is not None:
             return await _bind_existing_task(
                 db, user_id, idempotency,
@@ -730,8 +856,12 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
     source_key = None
     if db is not None:
         source_key = await source_key_for_url(db, user_id, raw_source["url"].strip())
+        if source_key and requested_range is not None:
+            source_key = f"{source_key}|range:{requested_range.key()}"
         if source_key:
-            existing = await TaskRepository.find_active_source_task(db, user_id, source_key)
+            existing = await TaskRepository.find_active_source_task(
+                db, user_id, source_key, team_id=team_id, **edit_identity
+            )
             if existing is not None:
                 return await _bind_existing_task(
                     db, user_id, idempotency,
@@ -740,7 +870,11 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
 
     try:
         billing_service = BillingService(db)
-        billing = await billing_service.assert_can_create_task(user_id)
+        billing = (
+            await billing_service.assert_can_create_task(user_id, team_id=team_id)
+            if team_id
+            else await billing_service.assert_can_create_task(user_id)
+        )
 
         task_service = TaskService(db)
 
@@ -758,22 +892,35 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
             raw_source["url"] = canonical_youtube_url(raw_source["url"]) or raw_source["url"]
         source_title = raw_source.get("title")
         stream_metadata: Dict[str, Any] | None = None
+        duration_limit = (
+            billing["max_youtube_duration_seconds"]
+            if source_type in {"youtube", "twitch", "kick"}
+            else billing["max_upload_duration_seconds"]
+        )
+        # With a picked part the whole video may be longer than the plan allows.
+        whole_video_limit = None if requested_range is not None else duration_limit
         if source_type == "youtube":
-            metadata = await _preflight_youtube_source(
-                raw_source["url"], billing["max_youtube_duration_seconds"]
-            )
+            metadata = await _preflight_youtube_source(raw_source["url"], whole_video_limit)
             source_title = source_title or metadata.get("title") or "YouTube Video"
             duration_seconds = float(metadata["duration"])
         elif source_type in {"twitch", "kick"}:
-            stream_metadata = await _preflight_stream_source(raw_source["url"], source_type, billing["max_youtube_duration_seconds"])
+            stream_metadata = await _preflight_stream_source(raw_source["url"], source_type, whole_video_limit)
             source_title = source_title or stream_metadata.get("title") or f"{source_type.title()} Video"
             duration_seconds = float(stream_metadata["duration"])
         else:
             if await foreign_upload(db, raw_source["url"], user_id):
                 raise HTTPException(status_code=404, detail="Video file not found")
             duration_seconds = await _preflight_upload_source(
-                raw_source["url"], user_id, billing["max_upload_duration_seconds"], db
+                raw_source["url"], user_id, whole_video_limit, db
             )
+
+        try:
+            source_range = resolve_source_range(requested_range, duration_seconds, duration_limit)
+        except SourceRangeError as exc:
+            raise HTTPException(status_code=422, detail=exc.to_detail()) from None
+        # Minutes are charged for the part that is processed, and refunded the same.
+        if source_range is not None:
+            duration_seconds = source_range.length
 
         try:
             check_source_duration(workflow_spec, duration_seconds)
@@ -781,7 +928,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
             raise HTTPException(status_code=exc.status, detail=exc.to_detail()) from None
 
         async with generation_allowance_guard(
-            db, user_id, enabled=runtime_config.monetization_enabled
+            db, user_id, enabled=runtime_config.monetization_enabled, team_id=team_id
         ):
             if idempotency:
                 # Admissions are serialized here. A retry that waited on the
@@ -789,11 +936,16 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                 replay = await _replay_task(db, user_id, idempotency)
                 if replay is not None:
                     return replay
-            await billing_service.assert_can_create_task(user_id, duration_seconds)
-            async with source_admission_lock(db, user_id, source_key):
+            if team_id:
+                await billing_service.assert_can_create_task(
+                    user_id, duration_seconds, team_id=team_id
+                )
+            else:
+                await billing_service.assert_can_create_task(user_id, duration_seconds)
+            async with source_admission_lock(db, f"team:{team_id}" if team_id else user_id, source_key):
                 if source_key:
                     existing = await TaskRepository.find_active_source_task(
-                        db, user_id, source_key
+                        db, user_id, source_key, team_id=team_id, **edit_identity
                     )
                     if existing is not None:
                         return await _bind_existing_task(
@@ -815,7 +967,9 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                         upload_request_key=upload_request_key,
                         workflow=workflow_spec.workflow,
                         workflow_options=workflow_options,
+                        **({"edit_style": edit_style_json} if edit_style_json else {}),
                         **({"idempotency": idempotency} if idempotency else {}),
+                        **({"team_id": team_id} if team_id else {}),
                     )
                 except TaskIdempotencyReplay:
                     # A concurrent request with this key committed its task first
@@ -841,6 +995,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                             "enqueued_at": datetime.now(timezone.utc).isoformat(),
                             **({"source_key": source_key} if source_key else {}),
                             **_stream_resolution_metadata(stream_metadata),
+                            **({SOURCE_RANGE_KEY: source_range.to_metadata()} if source_range else {}),
                         },
                         source_url=raw_source["url"],
                         source_type=source_type,
@@ -889,12 +1044,14 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                     "workflow": workflow_spec.workflow,
                     "source_kind": source_kind(source_type, raw_source["url"]),
                     "source_duration_seconds": math.ceil(duration_seconds),
+                    **({"source_range": True} if source_range else {}),
                     "has_instructions": bool(workflow_spec.options.instructions),
                     "plan": billing.get("plan") if isinstance(billing, dict) else None,
                     "client": request_client(request),
                     "processing_mode": processing_mode,
                     "output_format": output_format,
                     "clip_length": clip_length,
+                    **({"edit_intensity": edit_style.intensity} if edit_style.active else {}),
                 },
             )
 
@@ -930,12 +1087,14 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
 
 @router.get("/billing/summary")
 async def get_billing_summary(request: Request, db: AsyncSession = Depends(get_db)):
-    """Get monetization status and current usage for authenticated user."""
-    user_id = await _get_user_id_from_headers(request, db)
+    """Get monetization status and current usage for authenticated workspace."""
+    auth_ctx = await _get_auth_context(request, db)
 
     try:
         billing_service = BillingService(db)
-        summary = await billing_service.get_usage_summary(user_id)
+        summary = await billing_service.get_usage_summary(
+            auth_ctx.user_id, team_id=auth_ctx.team_id
+        )
         return summary
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -952,6 +1111,30 @@ async def get_workflows(request: Request, db: AsyncSession = Depends(get_db)):
     """What the authenticated user can make on this platform, with each workflow's limits."""
     user_id = await _get_user_id_from_headers(request, db)
     return workflows_info(await allowed_workflows(db, user_id, platform=client_platform(request)))
+
+
+# Declared before "/{task_id}", which would otherwise capture "edit-styles" as a task id.
+@router.get("/edit-styles")
+async def get_edit_styles(request: Request, db: AsyncSession = Depends(get_db)):
+    """Dynamic edits for the authenticated user on this platform: whether they are on, and the choices.
+
+    Clients show intensity, the edit toggles and the animated caption styles only when ``enabled`` is true, and
+    ask ``/caption-templates?include=fx`` only then.
+    """
+    user_id = await _get_user_id_from_headers(request, db)
+    defaults = EditStyle().model_dump()
+    defaults.pop("intensity")
+    return {
+        "enabled": await _dynamic_edits_enabled(db, request, user_id),
+        "intensities": list(INTENSITIES),
+        "defaults": defaults,
+        "settings": edit_style_schema(),
+        "music_moods": list(MOODS),
+        "grades": list(GRADES),
+        # Only the listed animated styles are offered; unlisted ids stay valid for stored tasks and API callers.
+        "templates": list(LISTED_FX_CAPTION_TEMPLATES),
+        "reactions_available": _reactions_available(),
+    }
 
 
 @router.get("/shared/{share_token}")
@@ -1180,18 +1363,11 @@ async def delete_task(
 ):
     """Delete a task and all its associated clips."""
     try:
-        user_id = await _get_user_id_from_headers(request, db)
         task_service = TaskService(db)
 
-        # Get task to verify ownership
-        task = await task_service.task_repo.get_task_by_id(db, task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        if task["user_id"] != user_id:
-            raise HTTPException(
-                status_code=403, detail="Not authorized to delete this task"
-            )
+        # The owner, or a current member of the task's team. A member removed
+        # from the team, or an API key bound to another workspace, is refused.
+        await _require_task_owner(request, task_service, db, task_id)
 
         # Delete clips and task
         await task_service.delete_task(task_id)
@@ -1213,18 +1389,9 @@ async def delete_clip(
 ):
     """Delete a specific clip."""
     try:
-        user_id = await _get_user_id_from_headers(request, db)
         task_service = TaskService(db)
 
-        # Verify task ownership
-        task = await task_service.task_repo.get_task_by_id(db, task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        if task["user_id"] != user_id:
-            raise HTTPException(
-                status_code=403, detail="Not authorized to delete this clip"
-            )
+        await _require_task_owner(request, task_service, db, task_id)
 
         clip = await task_service.clip_repo.get_clip_by_id(db, clip_id)
         if not clip or clip["task_id"] != task_id:
@@ -1367,6 +1534,73 @@ async def download_clip_archive(
     )
 
 
+async def _fx_clip_edit(
+    request: Request,
+    task_service: TaskService,
+    db: AsyncSession,
+    task: Dict[str, Any],
+    task_id: str,
+    clip_ids: list[str],
+) -> Optional[FxClipJobRequest]:
+    """The go-ahead to queue an edit on the video worker when any of ``clip_ids`` has dynamic edits (§13.0).
+
+    Legacy clips get None and keep the synchronous path byte for byte. Route unit tests without a database skip the
+    lookup.
+    """
+    if db is None:
+        return None
+    for clip_id in clip_ids:
+        clip = await task_service.clip_repo.get_clip_by_id(db, clip_id)
+        if clip and clip.get("task_id") == task_id and clip_has_fx(clip):
+            return FxClipJobRequest(
+                user_id=task["user_id"],
+                queue=getattr(request.app.state, "queue_adapter", None),
+            )
+    return None
+
+
+async def _queue_fx_clip_edit(
+    fx_job: FxClipJobRequest,
+    task: Dict[str, Any],
+    task_id: str,
+    kind: str,
+    args: Dict[str, Any],
+    clip_ids: list[str],
+) -> JSONResponse:
+    """Queue ``fx_clip_job`` and answer 202 ``{"status": "queued", "job_id", "kind", "clip_ids"}``.
+
+    Poll ``GET /tasks/{task_id}/clip-jobs/{job_id}``; ``result`` there is this route's synchronous body.
+    While another clip job of the task is queued or running: 409 ``CLIP_JOB_IN_PROGRESS`` with its ``job_id``.
+    """
+    if task.get("status") in {"queued", "processing"}:
+        raise ValueError("Wait for processing to finish before editing this task")
+    try:
+        queued = await enqueue_fx_clip_job(
+            task_id=task_id,
+            user_id=fx_job.user_id,
+            kind=kind,
+            args=args,
+            queue=fx_job.queue,
+            clip_ids=clip_ids,
+        )
+    except FxClipJobInProgress as exc:
+        raise HTTPException(status_code=409, detail=exc.detail()) from None
+    except Exception as exc:
+        logger.warning("Could not queue the %s edit for task %s: %s", kind, task_id, exc)
+        raise FxClipJobQueueError("The edit could not be queued") from exc
+    return JSONResponse(status_code=202, content=queued.body())
+
+
+def _clip_edit_queue_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "QUEUE_UNAVAILABLE",
+            "message": "The edit couldn't be queued for rendering. Nothing was changed; try again.",
+        },
+    )
+
+
 @router.patch("/{task_id}/clips/{clip_id}")
 async def trim_clip(
     task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
@@ -1381,11 +1615,19 @@ async def trim_clip(
             raise HTTPException(status_code=400, detail="Offsets must be non-negative")
 
         task_service = TaskService(db)
-        await _require_task_owner(request, task_service, db, task_id)
+        task = await _require_task_owner(request, task_service, db, task_id)
+        fx_job = await _fx_clip_edit(request, task_service, db, task, task_id, [clip_id])
+        if fx_job is not None:
+            return await _queue_fx_clip_edit(
+                fx_job, task, task_id, "trim",
+                {"clip_id": clip_id, "start_offset": start_offset, "end_offset": end_offset}, [clip_id],
+            )
         updated_clip = await task_service.trim_clip(
             task_id, clip_id, start_offset, end_offset
         )
         return {"clip": updated_clip}
+    except FxClipJobQueueError:
+        raise _clip_edit_queue_unavailable() from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -1409,9 +1651,16 @@ async def split_clip(
             )
 
         task_service = TaskService(db)
-        await _require_task_owner(request, task_service, db, task_id)
+        task = await _require_task_owner(request, task_service, db, task_id)
+        fx_job = await _fx_clip_edit(request, task_service, db, task, task_id, [clip_id])
+        if fx_job is not None:
+            return await _queue_fx_clip_edit(
+                fx_job, task, task_id, "split", {"clip_id": clip_id, "split_time": split_time}, [clip_id],
+            )
         result = await task_service.split_clip(task_id, clip_id, split_time)
         return result
+    except FxClipJobQueueError:
+        raise _clip_edit_queue_unavailable() from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -1433,9 +1682,18 @@ async def merge_clips(
             raise HTTPException(status_code=400, detail="clip_ids must be an array")
 
         task_service = TaskService(db)
-        await _require_task_owner(request, task_service, db, task_id)
+        task = await _require_task_owner(request, task_service, db, task_id)
+        fx_job = await _fx_clip_edit(request, task_service, db, task, task_id, clip_ids)
+        if fx_job is not None:
+            if len(clip_ids) < 2 or len(set(clip_ids)) != len(clip_ids):
+                raise ValueError("At least two distinct clips are required to merge")
+            return await _queue_fx_clip_edit(
+                fx_job, task, task_id, "merge", {"clip_ids": list(clip_ids)}, list(clip_ids),
+            )
         result = await task_service.merge_clips(task_id, clip_ids)
         return result
+    except FxClipJobQueueError:
+        raise _clip_edit_queue_unavailable() from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -1475,7 +1733,21 @@ async def update_clip_captions(
             raise ValueError("Invalid caption position")
 
         task_service = TaskService(db)
-        await _require_task_owner(request, task_service, db, task_id)
+        task = await _require_task_owner(request, task_service, db, task_id)
+        fx_job = await _fx_clip_edit(request, task_service, db, task, task_id, [clip_id])
+        if fx_job is not None:
+            return await _queue_fx_clip_edit(
+                fx_job, task, task_id, "captions",
+                {
+                    "clip_id": clip_id,
+                    "caption_text": caption_text,
+                    "position": position,
+                    "highlight_words": [str(word) for word in highlight_words],
+                    "font_size": font_size,
+                    "position_y": position_y,
+                },
+                [clip_id],
+            )
         updated_clip = await task_service.update_clip_captions(
             task_id,
             clip_id,
@@ -1486,6 +1758,8 @@ async def update_clip_captions(
             position_y=position_y,
         )
         return {"clip": updated_clip}
+    except FxClipJobQueueError:
+        raise _clip_edit_queue_unavailable() from None
     except YouTubeGeoRestrictedError as exc:
         raise HTTPException(
             status_code=422,
@@ -1513,11 +1787,19 @@ async def regenerate_clip(
         end_offset = _finite_number(payload.get("end_offset", 0), "end_offset")
 
         task_service = TaskService(db)
-        await _require_task_owner(request, task_service, db, task_id)
+        task = await _require_task_owner(request, task_service, db, task_id)
+        fx_job = await _fx_clip_edit(request, task_service, db, task, task_id, [clip_id])
+        if fx_job is not None:
+            return await _queue_fx_clip_edit(
+                fx_job, task, task_id, "trim",
+                {"clip_id": clip_id, "start_offset": start_offset, "end_offset": end_offset}, [clip_id],
+            )
         updated_clip = await task_service.trim_clip(
             task_id, clip_id, start_offset, end_offset
         )
         return {"clip": updated_clip, "message": "Clip regenerated successfully"}
+    except FxClipJobQueueError:
+        raise _clip_edit_queue_unavailable() from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -1533,7 +1815,12 @@ async def regenerate_clip(
 async def apply_task_settings(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
 ):
-    """Update task-level styling settings and optionally apply to all existing clips."""
+    """Update task-level styling settings and optionally apply to all existing clips.
+
+    ``edit_style`` omitted (or null) keeps the stored style. An omitted ``caption_template`` keeps a stored
+    animated template (legacy tasks still fall back to "default"). Only turning dynamic edits on is flag-gated.
+    Re-rendering clips with dynamic edits, or into them, runs on the video worker: 202 with a pollable job.
+    """
     try:
         payload = await _read_json_object(request)
         font_family = _normalize_font_family(payload.get("font_family"))
@@ -1541,12 +1828,42 @@ async def apply_task_settings(
         font_color = _normalize_font_color(payload.get("font_color"))
         caption_template = payload.get("caption_template", "default")
         apply_to_existing = bool(payload.get("apply_to_existing", False))
+        try:
+            requested_style = (
+                parse_edit_style(payload["edit_style"]) if payload.get("edit_style") is not None else None
+            )
+        except EditStyleError as exc:
+            raise _invalid_edit_style(exc) from None
 
         task_service = TaskService(db)
         await _require_task_owner(request, task_service, db, task_id)
         task_record = await task_service.task_repo.get_task_by_id(db, task_id)
         if not task_record:
             raise HTTPException(status_code=404, detail="Task not found")
+
+        stored_template = task_record.get("caption_template")
+        if "caption_template" not in payload and is_fx_template(stored_template):
+            caption_template = stored_template
+        stored_style = read_edit_style(task_record.get("edit_style"))
+        target_style = requested_style if requested_style is not None else stored_style
+        # Gate only a transition to FX (style off -> on, template legacy -> FX), so
+        # the kill switch never blocks turning edits off or a font change.
+        turns_fx_on = (target_style.active and not stored_style.active) or (
+            is_fx_template(caption_template) and not is_fx_template(stored_template)
+        )
+        if turns_fx_on and not await _dynamic_edits_enabled(db, request, task_record["user_id"]):
+            raise _dynamic_edits_not_available()
+        # Clips that already carry dynamic edits re-render on the worker too, even
+        # into a legacy look. Route unit tests without a database skip the lookup.
+        fx_job = None
+        if apply_to_existing and (
+            fx_active(target_style, caption_template)
+            or (db is not None and await task_service.task_repo.has_fx_clips(db, task_id))
+        ):
+            fx_job = FxClipJobRequest(
+                user_id=task_record["user_id"],
+                queue=getattr(request.app.state, "queue_adapter", None),
+            )
         # Like cleanup below: an omitted flag keeps the task's B-roll setting,
         # so a styling-only update doesn't strip B-roll from every clip.
         include_broll = (
@@ -1574,7 +1891,13 @@ async def apply_task_settings(
             include_broll,
             apply_to_existing,
             cleanup_settings,
+            **({"edit_style": target_style.to_json()} if requested_style is not None else {}),
+            **({"fx_job": fx_job} if fx_job is not None else {}),
         )
+        if isinstance(task, QueuedClipJob):
+            # The job re-renders and then stores the cleanup settings, like the
+            # synchronous path does after its regeneration (§13.0).
+            return JSONResponse(status_code=202, content=task.body())
         # Settings edits must not write the job ID captured before a lengthy
         # regeneration: a concurrent resume may have reserved a newer attempt.
         metadata.pop("processing_job_id", None)
@@ -1600,6 +1923,16 @@ async def apply_task_settings(
             status_code=422,
             detail={"code": "YOUTUBE_GEO_RESTRICTED", "message": str(exc)},
         ) from None
+    except FxClipJobInProgress as exc:
+        raise HTTPException(status_code=409, detail=exc.detail()) from None
+    except FxClipJobQueueError:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "QUEUE_UNAVAILABLE",
+                "message": "Your settings were saved, but the clips couldn't be queued for re-rendering. Try again.",
+            },
+        ) from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -1609,6 +1942,87 @@ async def apply_task_settings(
         raise HTTPException(
             status_code=500, detail=f"Error updating task settings: {str(e)}"
         )
+
+
+async def _close_queued_clip_job(job_id: str, state: Dict[str, Any], error: Dict[str, str]) -> bool:
+    """Give up on a clip job no worker has started, so that none starts it later. False if a worker has it.
+
+    The user is told to try again, and a retry would otherwise run next to the first job once the queue
+    clears (two trims or splits of one clip). Unreachable Redis is False too: the job may still run.
+    """
+    try:
+        if await claim_fx_clip_job(job_id, FX_CLIP_JOB_CLOSED) != FX_CLIP_JOB_CLOSED:
+            return False
+        await write_fx_clip_job_state(job_id, {**state, "status": "failed", "progress": 0.0, "error": error})
+        await release_fx_clip_job_marker(str(state.get("task_id") or ""), job_id)
+        return True
+    except Exception as exc:  # noqa: BLE001 - not closed, so not reported as failed
+        logger.warning("Could not close queued clip job %s: %s", job_id, exc)
+        return False
+
+
+@router.get("/{task_id}/clip-jobs/{job_id}")
+async def get_clip_job(
+    task_id: str, job_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Status of a clip edit queued on the video worker (202 from settings, captions, trim, split or merge).
+
+    ``{"status": "queued"|"running"|"done"|"failed", "kind", "progress": 0-1, "error"?: {code, message},
+    "result"?: the body the synchronous route would have returned}``. Clients poll every 2 s.
+    A job queued for 15 minutes is ``WORKER_UNAVAILABLE``; a running job without a heartbeat for 2 minutes, or one
+    older than its budget, is ``WORKER_STOPPED`` (``fx_clip_jobs.stale_job_error``).
+    """
+    task_service = TaskService(db)
+    await _require_task_owner(request, task_service, db, task_id)
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id or ""):
+        raise HTTPException(status_code=404, detail="Clip job not found")
+    try:
+        state = await read_fx_clip_job_state(job_id)
+    except Exception as exc:  # noqa: BLE001 - Redis down is a retryable 503, not a failed job
+        logger.warning("Could not read clip job %s: %s", job_id, exc)
+        raise HTTPException(status_code=503, detail="Clip job status is unavailable. Try again.") from None
+    if not state or state.get("task_id") != task_id:
+        raise HTTPException(status_code=404, detail="Clip job not found")
+
+    status = state.get("status") if state.get("status") in FX_CLIP_JOB_STATUSES else "queued"
+    try:
+        progress = min(1.0, max(0.0, float(state.get("progress") or 0.0)))
+    except (TypeError, ValueError):
+        progress = 0.0
+    body: Dict[str, Any] = {"status": status, "kind": state.get("kind"), "progress": progress}
+    try:
+        queued_at = float(state.get("queued_at") or 0.0)
+    except (TypeError, ValueError):
+        queued_at = 0.0
+    if status == "queued" and queued_at and time.time() - queued_at > FX_CLIP_JOB_QUEUE_TIMEOUT_SECONDS:
+        error = {
+            "code": "WORKER_UNAVAILABLE",
+            "message": "No worker picked up this edit. Please try again.",
+        }
+        # Failed only once no worker can run it any more; a job a worker has just taken stays queued here.
+        if await _close_queued_clip_job(job_id, state, error):
+            body["status"] = "failed"
+            body["error"] = error
+        return body
+    stale = stale_job_error({**state, "status": status})
+    if stale and status == "queued" and not await _close_queued_clip_job(job_id, state, stale):
+        return body
+    if stale:
+        # The worker died mid-job (no heartbeat) or the job outlived its budget: nothing will finish it.
+        body["status"] = "failed"
+        body["error"] = stale
+        return body
+    if status == "done":
+        body["progress"] = 1.0
+        if "result" in state:
+            body["result"] = state["result"]
+    if status == "failed":
+        error = state.get("error") if isinstance(state.get("error"), dict) else {}
+        body["error"] = {
+            "code": str(error.get("code") or "CLIP_JOB_FAILED"),
+            "message": str(error.get("message") or "The edit could not be rendered."),
+        }
+    return body
 
 
 @router.get("/{task_id}/clips/{clip_id}/export")
@@ -1775,10 +2189,21 @@ async def resume_task(
             if not source_url or not source_type:
                 raise HTTPException(status_code=400, detail="Task source URL is missing")
 
+            task_team_id = task.get("team_id")
             async with generation_allowance_guard(
-                db, task["user_id"], enabled=get_config().monetization_enabled
+                db,
+                task["user_id"],
+                enabled=get_config().monetization_enabled,
+                **({"team_id": task_team_id} if task_team_id else {}),
             ):
-                await BillingService(db).assert_can_resume_task(task["user_id"], task_id)
+                if task_team_id:
+                    await BillingService(db).assert_can_resume_task(
+                        task["user_id"], task_id, team_id=task_team_id
+                    )
+                else:
+                    await BillingService(db).assert_can_resume_task(
+                        task["user_id"], task_id
+                    )
 
                 try:
                     runtime_config = get_config()

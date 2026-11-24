@@ -410,3 +410,107 @@ async def test_providers_report_tiktok_paused_by_its_flag(app, client, auth_head
     rows = await providers()
     assert rows["tiktok"]["configured"] is True and "paused" not in rows["tiktok"]
     feature_flags.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_providers_gate_instagram_behind_flag_with_admin_bypass(
+    app, client, db_session, auth_headers, feature_flag, monkeypatch
+):
+    from src import feature_flags
+    from tests.integration.test_feature_flags import headers_for
+
+    await create_user(db_session, user_id="user-1", is_admin=False)
+    await create_user(db_session, user_id="admin-1", is_admin=True)
+
+    config = app.state.config
+    monkeypatch.setattr(config, "social_publishing_access", "all")
+    monkeypatch.setattr(config, "social_publishing_providers", frozenset({"youtube", "instagram"}))
+    for field in ("youtube_oauth_client_id", "youtube_oauth_client_secret", "instagram_app_id", "instagram_app_secret"):
+        monkeypatch.setattr(config, field, "test-credential")
+
+    async def providers(headers):
+        feature_flags.clear_cache()
+        response = await client.get("/social/providers", headers=headers)
+        assert response.status_code == 200, response.text
+        return {row["provider"]: row for row in response.json()["providers"]}
+
+    # Seeded off with admins_bypass=True: regular users see Coming soon (no paused banner),
+    # while admins can connect and test Instagram Reels.
+    user_rows = await providers(auth_headers)
+    assert user_rows["instagram"]["configured"] is False
+    assert "paused" not in user_rows["instagram"]
+    blocked = await client.post("/social/connections/instagram/authorize", headers=auth_headers)
+    assert blocked.status_code == 503 and "not available" in blocked.json()["detail"]
+
+    admin_headers = headers_for("admin-1")
+    admin_rows = await providers(admin_headers)
+    assert admin_rows["instagram"]["configured"] is True
+    assert "paused" not in admin_rows["instagram"]
+    started = await client.post("/social/connections/instagram/authorize", headers=admin_headers)
+    assert started.status_code == 200
+
+    await feature_flag("instagram_publishing", web_enabled=True)
+    user_rows = await providers(auth_headers)
+    assert user_rows["instagram"]["configured"] is True
+    feature_flags.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_publish_notification_respects_user_setting_and_stamps_once(
+    social_setup, client, db_session, auth_headers, monkeypatch,
+):
+    _, payload = social_setup
+    sent = []
+
+    class FakePublishEmailService:
+        def __init__(self, config):
+            self.config = config
+
+        is_configured = True
+
+        async def send_clip_published_email(self, **kwargs):
+            sent.append(kwargs)
+            return {"MessageId": f"msg-{len(sent)}"}
+
+    monkeypatch.setattr(social_service, "SocialPublishEmailService", FakePublishEmailService)
+
+    # Publish notifications are off by default.
+    first_res = await client.post("/social/posts", headers=auth_headers, json=payload)
+    assert first_res.status_code == 200
+    first_post = first_res.json()["post"]
+
+    service = SocialService(db_session, queue_adapter=FakeQueue())
+    published = await service.publish_post(first_post["id"])
+    assert published["status"] == "published"
+    assert sent == []
+
+    first_row = (
+        await db_session.execute(
+            text("SELECT publish_notification_sent_at FROM social_posts WHERE id = :id"),
+            {"id": first_post["id"]},
+        )
+    ).fetchone()
+    assert first_row.publish_notification_sent_at is None
+
+    # Turn on publish notifications for the user and publish another clip.
+    await db_session.execute(
+        text("UPDATE users SET notify_on_publish = true WHERE id = 'user-1'")
+    )
+    await db_session.commit()
+
+    second_res = await client.post("/social/posts", headers=auth_headers, json=payload)
+    assert second_res.status_code == 200
+    second_post = second_res.json()["post"]
+
+    published_second = await service.publish_post(second_post["id"])
+    assert published_second["status"] == "published"
+    assert len(sent) == 1
+    assert sent[0]["recipient"].email == "user-1@example.com"
+
+    second_row = (
+        await db_session.execute(
+            text("SELECT publish_notification_sent_at FROM social_posts WHERE id = :id"),
+            {"id": second_post["id"]},
+        )
+    ).fetchone()
+    assert second_row.publish_notification_sent_at is not None

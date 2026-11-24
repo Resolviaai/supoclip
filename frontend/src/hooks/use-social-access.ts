@@ -1,65 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-// One request per page load, shared by the shell and the pages it wraps.
-let pending: Promise<boolean> | null = null;
+import { useQuery } from "@tanstack/react-query";
+import { useSession } from "@/lib/auth-client";
 
 /** True only when this server explicitly grants social publishing. Missing or false stays hidden. */
 export function isSocialPublishingEnabled(data: { enabled?: boolean } | null | undefined) {
   return data?.enabled === true;
 }
 
-const STORAGE_KEY = "supoclip:social-access";
-
-function readCachedAccess(): boolean | null {
-  if (typeof window === "undefined") return null;
+async function loadSocialAccess(): Promise<boolean> {
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
-    return raw === "1" ? true : raw === "0" ? false : null;
+    const response = await fetch("/api/social/providers", { cache: "no-store" });
+    if (!response.ok) return false;
+    return isSocialPublishingEnabled((await response.json()) as { enabled?: boolean });
   } catch {
-    return null;
+    return false;
   }
-}
-
-function writeCachedAccess(value: boolean) {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(STORAGE_KEY, value ? "1" : "0");
-  } catch { /* ignore storage errors */ }
-}
-
-function loadSocialAccess() {
-  pending ??= fetch("/api/social/providers", { cache: "no-store" })
-    .then(async (response) => {
-      if (!response.ok) {
-        pending = null;
-        return false;
-      }
-      const data = (await response.json()) as { enabled?: boolean };
-      const value = isSocialPublishingEnabled(data);
-      writeCachedAccess(value);
-      return value;
-    })
-    .catch(() => {
-      pending = null;
-      return false;
-    });
-  return pending;
 }
 
 /** Whether social publishing is available to the signed-in user (null while loading). */
 export function useSocialAccess(enabled = true) {
-  const [access, setAccess] = useState<boolean | null>(() => (enabled ? readCachedAccess() : null));
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    void loadSocialAccess().then((value) => {
-      if (!cancelled) setAccess(value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled]);
-  return access;
+  const { data: session } = useSession();
+  const { data } = useQuery({
+    queryKey: ["social-access", session?.user?.id ?? "anonymous"],
+    queryFn: loadSocialAccess,
+    enabled,
+    // Asked once per page load, shared by the shell and the pages it wraps.
+    staleTime: Infinity,
+  });
+  return enabled ? data ?? null : null;
 }

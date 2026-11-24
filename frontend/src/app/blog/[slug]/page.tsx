@@ -1,5 +1,7 @@
 import { formatArticleDate } from "@/components/articles/article-shell";
+import { ClipperComparisonArticle } from "@/components/articles/clipper-comparison-article";
 import { CreatorGuideArticle } from "@/components/articles/creator-guide-article";
+import { FreeOpusClipAlternativesArticle } from "@/components/articles/free-opusclip-alternatives-article";
 import { Gta6ClippingArticle } from "@/components/articles/gta6/gta6-clipping-article";
 import { OpusClipComparisonArticle } from "@/components/articles/opusclip-comparison-article";
 import { SelfHostingGuideArticle } from "@/components/articles/self-hosting-guide-article";
@@ -30,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { intlLocale } from "@/i18n/config";
 import { applyBlogCopy, HOSTED_APP_URL, blogPosts, getBlogPost, getBlogPostMetadata, getSiteUrl } from "@/lib/blog-posts";
+import { resolveContentLocale, resolveGuideLocale } from "@/lib/localized-guides";
 import { OPUSCLIP_COMPARISON_HREF, SELF_HOSTING_GUIDE_HREF } from "@/lib/marketing-links";
 import { getCreatorGuide } from "@/lib/creator-guides";
 
@@ -59,8 +62,8 @@ export async function generateMetadata({ params }: BlogPostPageProps): Promise<M
     return {};
   }
 
-  const t = await getTranslations("blog");
-  return getBlogPostMetadata(applyBlogCopy(post, (key) => t(key)));
+  const [locale, t] = await Promise.all([getLocale(), getTranslations("blog")]);
+  return getBlogPostMetadata(applyBlogCopy(post, (key) => t(key), locale));
 }
 
 export default async function BlogPostPage({ params }: BlogPostPageProps) {
@@ -74,16 +77,28 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
   if (slug === "tiktok-publishing-is-live") {
     return <TikTokPublishingArticle post={basePost} />;
   }
-  if (slug === "how-to-clip-gta-6") {
-    return <Gta6ClippingArticle post={basePost} />;
+  if (slug === "supoclip-vs-opusclip-klap-vizard") {
+    return <ClipperComparisonArticle post={basePost} />;
+  }
+  if (slug === "free-opusclip-alternatives") {
+    return <FreeOpusClipAlternativesArticle post={basePost} />;
   }
 
-  const guide = getCreatorGuide(slug);
-  if (guide) return <CreatorGuideArticle guide={guide} />;
+  const locale = await getLocale();
+
+  if (slug === "how-to-clip-gta-6") {
+    const contentLocale = resolveGuideLocale(locale);
+    const localizedPost = applyBlogCopy(basePost, () => "", contentLocale);
+    return <Gta6ClippingArticle post={localizedPost} locale={contentLocale} />;
+  }
+
+  const guide = getCreatorGuide(slug, locale);
+  if (guide) {
+    return <CreatorGuideArticle guide={guide} locale={resolveContentLocale(guide.post.languages, locale)} />;
+  }
 
   const t = await getTranslations("blog");
-  const locale = await getLocale();
-  const post = applyBlogCopy(basePost, (key) => t(key));
+  const post = applyBlogCopy(basePost, (key) => t(key), locale);
 
   if (slug === "supoclip-vs-supo-live") {
     return <SupoLiveArticle post={post} />;

@@ -4,12 +4,14 @@ import { removeTaskDrafts } from "@/lib/editor/draft-cache";
 import { CaptionSizeControl } from "@/components/caption-size-control";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { useTaskProgress } from "@/hooks/use-task-progress";
 import { StatusBadge, ACTIVE_TASK_STATUSES } from "@/components/app/status-badge";
 import { getClipUrl, requestAction, EXPORT_PRESETS } from "@/lib/clip-actions";
 import { clipExportFilePath, pollClipExport, triggerFileDownload } from "@/lib/clip-export";
+import { followClipJob } from "@/lib/clip-job";
 import { downloadAllClips } from "@/lib/clip-archive";
 import { trackClipExport } from "@/lib/clip-export-tracking";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -38,6 +40,10 @@ import {
   SheetFooter,
 } from "@/components/ui/sheet";
 import { useSession } from "@/lib/auth-client";
+import { Switch } from "@/components/ui/switch";
+import { useEditStylesInfo } from "@/components/edit-intensity";
+import { DEFAULT_EDIT_STYLE, editStyleToJson, INTENSITIES, isFxTemplate, type EditStyle, type Intensity } from "@/lib/fx/core/types";
+import { offeredFxTemplates, readEditStyle } from "@/lib/fx/edit-style-request";
 import { ApiRequestError, formatSupportMessage, parseApiError } from "@/lib/api-error";
 import { useCopyText } from "@/lib/copy-text";
 import { useBillingSummary } from "@/hooks/use-billing-summary";
@@ -79,14 +85,24 @@ import { intlLocale } from "@/i18n/config";
 import { timeAgoLabel } from "@/lib/generations";
 import { VIDEO_SOURCE_LABELS, VideoSourceIcon, videoSourceKind, type VideoSourceKind } from "@/components/video-source-icon";
 import { cn } from "@/lib/utils";
+import { formatClock } from "@/lib/source-range";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 import { ClipPostList, ClipPublishButton, useSocialPostToasts } from "@/components/clip-publisher";
 import {
-  ACTIVE_POST_STATUSES,
-  type SocialConnection,
-  type SocialPost,
-  type SocialProviderStatus,
-} from "@/lib/social";
+  dropDeletedTaskFromLists,
+  forgetTaskDetail,
+  taskDetailLoadCount,
+  taskPageKeys,
+  updateTaskDetail,
+  useBrollAvailable,
+  useCaptionTemplates,
+  useSocialPublishContext,
+  useTaskDetail,
+  useTaskFonts,
+  useTaskSocialPosts,
+  type CaptionTemplateOption,
+} from "@/lib/queries/task-detail";
+import type { SocialConnection, SocialProviderStatus } from "@/lib/social";
 import {
   defaultSort,
   expectedOutputs,
@@ -121,6 +137,54 @@ interface Clip extends WorkflowClipFields {
   shareability_score: number;
   hook_type: string | null;
   hook_title: string | null;
+  /** Dynamic edits on this clip (only present when it has them): render level, caption timing, intensity, template. */
+  fx_meta?: ClipFxMeta | null;
+}
+
+type ClipFxMeta = { fx_level?: string | null; timing?: string | null; intensity?: string | null; template?: string | null };
+
+/** A clip edit running on the video worker (202 from settings, captions, trim, split or merge). */
+type ClipJob = {
+  id: string; kind: string; clipIds: string[] | "all"; progress: number;
+  /** The settings body that queued it, resent as it is by "Try again". */
+  request?: string;
+  /** The sentence shown once following ended badly. */
+  error?: string | null;
+  /** What "Try again" does: follow the job again (its status could not be read) or send `request` again. */
+  retry?: "resume" | "resend";
+};
+/** The edit toggles the restyle sheet offers (the create screen has the full set). */
+const SHEET_FX_TOGGLES = ["sfx", "music", "zooms", "transitions", "progress_bar"] as const satisfies readonly (keyof EditStyle)[];
+const clipJobStorageKey = (taskId: string) => `supoclip.clipJob.${taskId}`;
+
+function readStoredClipJob(taskId: string): ClipJob | null {
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(clipJobStorageKey(taskId)) ?? "null");
+    return parsed && typeof parsed.id === "string" && /^[0-9a-f]{32}$/.test(parsed.id)
+      ? {
+          id: parsed.id, kind: String(parsed.kind ?? "settings"), clipIds: Array.isArray(parsed.clipIds) ? parsed.clipIds : "all", progress: 0,
+          request: typeof parsed.request === "string" ? parsed.request : undefined,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeClipJob(taskId: string, job: ClipJob | null) {
+  try {
+    if (job) window.sessionStorage.setItem(clipJobStorageKey(taskId), JSON.stringify({ id: job.id, kind: job.kind, clipIds: job.clipIds, request: job.request }));
+    else window.sessionStorage.removeItem(clipJobStorageKey(taskId));
+  } catch { /* storage blocked: polling still works for this visit */ }
+}
+
+/** The notes a clip's dynamic edits need: approximate caption timing, effects the renderer had to simplify. */
+function clipFxNotes(meta: ClipFxMeta | null | undefined): ("approxTiming" | "simplified")[] {
+  if (!meta) return [];
+  return [
+    ...(meta.timing && meta.timing !== "word" ? ["approxTiming" as const] : []),
+    ...(meta.fx_level && meta.fx_level !== "full" ? ["simplified" as const] : []),
+  ];
 }
 
 interface TaskDetails extends WorkflowTaskFields {
@@ -135,6 +199,9 @@ interface TaskDetails extends WorkflowTaskFields {
   progress_message?: string;
   clips_count: number;
   source_duration_seconds?: number | null;
+  /** Set when only part of the video was clipped; seconds into the original. Clip times are already on the original's timeline. */
+  source_start_seconds?: number | null;
+  source_end_seconds?: number | null;
   created_at: string;
   updated_at: string;
   font_family?: string | null;
@@ -152,6 +219,8 @@ interface TaskDetails extends WorkflowTaskFields {
   clip_length?: string | null;
   add_subtitles?: boolean | null;
   error_code?: string | null;
+  /** Dynamic edits as stored (`tasks.edit_style`); null or absent when off. */
+  edit_style?: unknown;
 }
 
 // Params each note needs; a note missing one is not shown rather than shown half-filled.
@@ -173,16 +242,30 @@ function noteParams(note: WorkflowNote, plan: WorkflowPlan | null, clipCount: nu
   return (NOTE_PARAMS[note.code] ?? []).every((key) => params[key] !== undefined && params[key] !== null) ? params : null;
 }
 
+const NO_CLIPS: Clip[] = [];
+const NO_FONTS: FontOption[] = [];
+const NO_TEMPLATES: CaptionTemplateOption[] = [];
+const NO_CONNECTIONS: SocialConnection[] = [];
+const NO_PROVIDERS: SocialProviderStatus[] = [];
+
 function sourceLabel(source: VideoSourceKind, uploadLabel: string) {
   return source === "upload" ? uploadLabel : VIDEO_SOURCE_LABELS[source];
 }
 
 /** Link back to the YouTube/Twitch/Kick video a task was cut from, when its URL is stored. */
-function originalVideoUrl(task: Pick<TaskDetails, "source_type" | "source_url">): string | null {
+function originalVideoUrl(task: Pick<TaskDetails, "source_type" | "source_url" | "source_start_seconds">): string | null {
   if (videoSourceKind(task.source_type) === "upload" || !task.source_url) return null;
   try {
     const url = new URL(task.source_url);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    // A clipped part opens the original where the part starts.
+    const start = Math.floor(task.source_start_seconds ?? 0);
+    if (start > 0) {
+      const kind = videoSourceKind(task.source_type);
+      if (kind === "youtube") url.searchParams.set("t", `${start}s`);
+      else if (kind === "twitch") url.searchParams.set("t", `${Math.floor(start / 3600)}h${Math.floor((start % 3600) / 60)}m${start % 60}s`);
+    }
+    return url.href;
   } catch {
     return null;
   }
@@ -190,6 +273,7 @@ function originalVideoUrl(task: Pick<TaskDetails, "source_type" | "source_url">)
 
 export default function TaskPage() {
   const t = useTranslations("task");
+  const tHome = useTranslations("home");
   const tLibrary = useTranslations("library");
   const copyText = useCopyText();
   const locale = useLocale();
@@ -198,7 +282,23 @@ export default function TaskPage() {
   const alreadyProcessing = searchParams.get("already") === "1";
   const router = useRouter();
   const { data: session } = useSession();
-  const [task, setTask] = useState<TaskDetails | null>(null);
+  const queryClient = useQueryClient();
+  const taskId = params.id ? String(params.id) : "";
+  const taskQuery = useTaskDetail<TaskDetails, Clip>(taskId, (kind, status) =>
+    kind === "task" ? t("errors.fetchTask", { status }) : t("errors.fetchClips", { status }));
+  const task = taskQuery.data?.task ?? null;
+  const clips = taskQuery.data?.clips ?? NO_CLIPS;
+  // Progress lives on the cached task: a fetch sets it and SSE events overwrite it.
+  const progress = task?.progress ?? 0;
+  const progressMessage = task?.progress_message ?? "";
+  // A failed load the user asked for (first load, Retry, refresh after an action) replaces the page;
+  // a failed background refresh keeps the last task on screen.
+  // `errorUpdatedAt` of that failure: it stands until the task loads again (any later success clears it).
+  const [foregroundErrorAt, setForegroundErrorAt] = useState<number | null>(null);
+  const foregroundFailed = foregroundErrorAt !== null && taskQuery.dataUpdatedAt <= foregroundErrorAt;
+  const error = taskQuery.status === "error" && (foregroundFailed || !taskQuery.data)
+    ? (taskQuery.error instanceof Error ? taskQuery.error.message : t("errors.load"))
+    : null;
   const failureCode = task?.status === "error" && isWorkflowErrorCode(task.error_code) ? task.error_code : null;
   // Source failures a retry can't fix get their own explanation.
   const failedBody = task?.error_code === "youtube_age_restricted"
@@ -208,11 +308,6 @@ export default function TaskPage() {
       : t("failedBody");
   // Next steps on the failure screen stay inside what this user may make.
   const workflowsInfo = useWorkflowsInfo(Boolean(failureCode));
-  const [clips, setClips] = useState<Clip[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -221,9 +316,6 @@ export default function TaskPage() {
   const [exportPreset, setExportPreset] = useState("original");
   const [shareState, setShareState] = useState<"idle" | "copying" | "copied">("idle");
   const [isRevokingShare, setIsRevokingShare] = useState(false);
-  const [socialConnections, setSocialConnections] = useState<SocialConnection[]>([]);
-  const [socialProviders, setSocialProviders] = useState<SocialProviderStatus[]>([]);
-  const [socialPosts, setSocialPosts] = useState<SocialPost[]>([]);
 
   // null means "use the caption template's own value" — mirrors the create form's contract.
   const [projectFontFamily, setProjectFontFamily] = useState<string | null>(null);
@@ -234,21 +326,16 @@ export default function TaskPage() {
   const [projectPauseThresholdMs, setProjectPauseThresholdMs] = useState("1200");
   const [projectRemoveFillerWords, setProjectRemoveFillerWords] = useState(false);
   const [projectIncludeBroll, setProjectIncludeBroll] = useState(false);
-  const [brollAvailable, setBrollAvailable] = useState(false);
-  useEffect(() => {
-    fetch("/api/broll/status")
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => setBrollAvailable(data?.configured === true))
-      .catch(() => setBrollAvailable(false));
-  }, []);
+  // Dynamic edits: what the task has stored, and the sheet's working copy.
+  const [storedEditStyle, setStoredEditStyle] = useState<EditStyle>(DEFAULT_EDIT_STYLE);
+  const [projectEditStyle, setProjectEditStyle] = useState<EditStyle>(DEFAULT_EDIT_STYLE);
+  const [clipJob, setClipJob] = useState<ClipJob | null>(null);
+  const brollAvailable = useBrollAvailable();
   const [projectFilteredWords, setProjectFilteredWords] = useState("");
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
-  const [availableFonts, setAvailableFonts] = useState<FontOption[]>([]);
+  const availableFonts = useTaskFonts().data ?? NO_FONTS;
   const [deletingFontName, setDeletingFontName] = useState<string | null>(null);
-  const [availableTemplates, setAvailableTemplates] = useState<
-    Array<{ id: string; name: string; description: string; animation: string }>
-  >([]);
   const [fontToDelete, setFontToDelete] = useState<FontOption | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [billingSummary] = useBillingSummary(Boolean(session?.user?.id));
@@ -263,201 +350,88 @@ export default function TaskPage() {
 
   const taskApiUrl = "/api/tasks";
 
-  const loadSocialPosts = useCallback(async () => {
-    if (!params.id) return;
-    try {
-      const response = await fetch(`/api/social/posts?task_id=${params.id}`, { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as { posts?: SocialPost[] };
-      setSocialPosts(data.posts ?? []);
-    } catch {
-      // Publishing is optional; never block the task page on it.
-    }
-  }, [params.id]);
-
-  const loadSocialContext = useCallback(async () => {
-    try {
-      const [connectionsResponse, providersResponse] = await Promise.all([
-        fetch("/api/social/connections", { cache: "no-store" }),
-        fetch("/api/social/providers", { cache: "no-store" }),
-      ]);
-      if (connectionsResponse.ok) {
-        const data = (await connectionsResponse.json()) as { connections?: SocialConnection[] };
-        setSocialConnections(data.connections ?? []);
-      }
-      if (providersResponse.ok) {
-        const data = (await providersResponse.json()) as { providers?: SocialProviderStatus[] };
-        setSocialProviders(data.providers ?? []);
-      }
-    } catch {
-      // Publishing is optional; never block the task page on it.
-    }
-    await loadSocialPosts();
-  }, [loadSocialPosts]);
-
-  // Load publishing context once the task is done, then poll while a post is in flight.
-  useEffect(() => {
-    if (!session?.user?.id || task?.status !== "completed") return;
-    void loadSocialContext();
-  }, [session?.user?.id, task?.status, loadSocialContext]);
-
-  // Poll quickly while an upload is in flight so its progress and outcome show
-  // up promptly, and slowly while something is scheduled.
+  // Publishing context loads once the task is done; posts poll while one is in flight or scheduled.
+  const socialEnabled = Boolean(session?.user?.id) && task?.status === "completed";
+  const socialContext = useSocialPublishContext(socialEnabled);
+  const socialConnections = socialContext.connections ?? NO_CONNECTIONS;
+  const socialProviders = socialContext.providers ?? NO_PROVIDERS;
+  const { posts: socialPosts, reload: loadSocialPosts } = useTaskSocialPosts(taskId, socialEnabled);
   useSocialPostToasts(socialPosts);
-  useEffect(() => {
-    const inFlight = socialPosts.some((post) => ACTIVE_POST_STATUSES.includes(post.status));
-    const scheduled = socialPosts.some((post) => post.status === "scheduled");
-    if (!inFlight && !scheduled) return;
-    const interval = window.setInterval(() => {
-      void loadSocialPosts();
-    }, inFlight ? 4000 : 30000);
-    return () => window.clearInterval(interval);
-  }, [socialPosts, loadSocialPosts]);
 
   const buildSupportError = useCallback(async (response: Response, fallbackMessage: string) => {
     const parsed = await parseApiError(response, fallbackMessage);
     return formatSupportMessage(parsed);
   }, []);
 
-  const fetchTaskStatus = useCallback(
-    async (retryCount = 0, maxRetries = 5, background = false) => {
-      if (!params.id) return false;
-
-      try {
-        const taskResponse = await fetch(`${taskApiUrl}/${params.id}`, {
-          cache: "no-store",
-        });
-
-        // Handle 404 with retry logic (task might not be persisted yet)
-        if (taskResponse.status === 404 && retryCount < maxRetries) {
-          console.log(
-            `Task not found yet, retrying in ${(retryCount + 1) * 500}ms... (${retryCount + 1}/${maxRetries})`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, (retryCount + 1) * 500));
-          return fetchTaskStatus(retryCount + 1, maxRetries, background);
-        }
-
-        if (!taskResponse.ok) {
-          throw new Error(await buildSupportError(taskResponse, t("errors.fetchTask", { status: taskResponse.status })));
-        }
-
-        const taskData = await taskResponse.json();
-        setProgress(taskData.progress ?? 0);
-        setProgressMessage(taskData.progress_message ?? "");
-        setError(null);
-        if (!background) {
-        setProjectFontFamily(taskData.font_family ?? null);
-        setProjectFontSize(typeof taskData.font_size === "number" ? taskData.font_size : null);
-        setProjectFontColor(taskData.font_color ?? null);
-        setProjectCaptionTemplate(taskData.caption_template || "default");
-        setProjectCutLongPauses(Boolean(taskData.cut_long_pauses));
-        setProjectPauseThresholdMs(String(taskData.pause_threshold_ms || 1200));
-        setProjectRemoveFillerWords(Boolean(taskData.remove_filler_words));
-        setProjectIncludeBroll(Boolean(taskData.include_broll));
-        setProjectFilteredWords((taskData.filtered_words || []).join(", "));
-        if (!sortChosen.current) {
-          sortChosen.current = true;
-          setSortBy(defaultSort(taskWorkflow(taskData)));
-        }
-        }
-
-        // Queued retries can already have completed clips, including after reload.
-        const clipsResponse = await fetch(`${taskApiUrl}/${params.id}/clips`, {
-          cache: "no-store",
-        });
-
-        if (!clipsResponse.ok) {
-          throw new Error(await buildSupportError(clipsResponse, t("errors.fetchClips", { status: clipsResponse.status })));
-        }
-
-        const clipsData = await clipsResponse.json();
-        const nextClips = clipsData.clips || [];
-        setClips((prev) => {
-          // Once the task stops, the server's list is the truth: a failed series,
-          // recap or trailer has had its clips deleted (and its minutes refunded).
-          if (taskData.status !== "processing") {
-            return nextClips;
-          }
-
-          const merged = new Map<string, Clip>();
-          for (const clip of prev) {
-            merged.set(clip.id, clip);
-          }
-          for (const clip of nextClips) {
-            merged.set(clip.id, clip);
-          }
-          return Array.from(merged.values()).sort(
-            (a, b) => (a.clip_order ?? 0) - (b.clip_order ?? 0),
-          );
-        });
-
-        setTask(taskData);
-        return true;
-      } catch (err) {
-        console.error("Error fetching task data:", err);
-        if (!background) setError(err instanceof Error ? err.message : t("errors.load"));
-        return false;
-      }
-    },
-    [buildSupportError, params.id, t, taskApiUrl],
-  );
-
-  // Initial fetch - runs immediately, doesn't wait for session
-  useEffect(() => {
-    if (!params.id) return;
-
-    const fetchTaskData = async () => {
-      try {
-        setIsLoading(true);
-        await fetchTaskStatus();
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchTaskData();
-  }, [params.id, fetchTaskStatus]);
-
-  useEffect(() => {
-    const loadFonts = async () => {
-      try {
-        const response = await fetch("/api/fonts", { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-        const data = await response.json();
-        setAvailableFonts(data.fonts || []);
-      } catch (loadError) {
-        console.error("Failed to load fonts:", loadError);
-      }
-    };
-
-    void loadFonts();
-
-    const loadTemplates = async () => {
-      try {
-        const response = await fetch("/api/caption-templates");
-        if (response.ok) {
-          const data = await response.json();
-          setAvailableTemplates(data.templates || []);
-        }
-      } catch (error) {
-        console.error("Failed to load caption templates:", error);
-      }
-    };
-    void loadTemplates();
+  /** Fill the restyle sheet from the task as stored; the first load also picks the default sort. */
+  const syncSettingsFromTask = useCallback((taskData: TaskDetails) => {
+    setProjectFontFamily(taskData.font_family ?? null);
+    setProjectFontSize(typeof taskData.font_size === "number" ? taskData.font_size : null);
+    setProjectFontColor(taskData.font_color ?? null);
+    setProjectCaptionTemplate(taskData.caption_template || "default");
+    setProjectCutLongPauses(Boolean(taskData.cut_long_pauses));
+    setProjectPauseThresholdMs(String(taskData.pause_threshold_ms || 1200));
+    setProjectRemoveFillerWords(Boolean(taskData.remove_filler_words));
+    setProjectIncludeBroll(Boolean(taskData.include_broll));
+    setProjectFilteredWords((taskData.filtered_words || []).join(", "));
+    setStoredEditStyle(readEditStyle(taskData.edit_style));
+    setProjectEditStyle(readEditStyle(taskData.edit_style));
+    if (!sortChosen.current) {
+      sortChosen.current = true;
+      setSortBy(defaultSort(taskWorkflow(taskData)));
+    }
   }, []);
 
+  // The sheet fills from the task as soon as there is one, cached from an earlier visit included. The first
+  // load of this visit fills it again, unless the sheet has been opened by then (it never overwrites the user).
+  const [firstLoadOfVisit] = useState(() => taskDetailLoadCount() + 1);
+  const sheetSync = useRef<"none" | "cached" | "done">("none");
+  const shownTask = taskQuery.data?.task;
+  const shownLoad = taskQuery.data?.loadNumber ?? 0;
+  useEffect(() => {
+    if (!shownTask || sheetSync.current === "done") return;
+    const fresh = shownLoad >= firstLoadOfVisit;
+    if (sheetSync.current === "cached" && (settingsSheetOpen || !fresh)) {
+      if (settingsSheetOpen) sheetSync.current = "done";
+      return;
+    }
+    syncSettingsFromTask(shownTask);
+    sheetSync.current = fresh ? "done" : "cached";
+  }, [shownTask, shownLoad, firstLoadOfVisit, settingsSheetOpen, syncSettingsFromTask]);
+
+  const { refetch: refetchTask } = taskQuery;
+  /** Reload the task the user is waiting on: a failure shows the error page, success refills the sheet. */
+  const reloadTask = useCallback(async () => {
+    const result = await refetchTask();
+    setForegroundErrorAt(result.status === "error" ? result.errorUpdatedAt : null);
+    if (result.status === "success") syncSettingsFromTask(result.data.task);
+  }, [refetchTask, syncSettingsFromTask]);
+  /** Refresh behind the scenes (SSE reconcile, finished clip job): a failure keeps what is on screen. */
+  const refreshTaskInBackground = useCallback(async () => {
+    await refetchTask({ cancelRefetch: false });
+  }, [refetchTask]);
+
+  // Dynamic edits are offered (and animated templates asked for) only when the server says they're on for this user.
+  const editStylesInfo = useEditStylesInfo(Boolean(session?.user?.id));
+  const fxEnabled = editStylesInfo?.enabled === true;
+  const availableTemplates = useCaptionTemplates(fxEnabled).data ?? NO_TEMPLATES;
+
   const { reconnecting } = useTaskProgress<Clip>({
-    taskId: String(params.id || ""),
+    taskId,
     active: ACTIVE_TASK_STATUSES.includes(task?.status || ""),
-    refresh: () => fetchTaskStatus(0, 0, true),
-    onProgress: (data) => {
-      if (typeof data.progress === "number") setProgress(data.progress);
-      if (typeof data.message === "string") setProgressMessage(data.message);
-    },
-    onClip: (clip) => setClips((current) =>
-      [...current.filter((item) => item.id !== clip.id), clip].sort((a, b) => a.clip_order - b.clip_order)),
+    refresh: refreshTaskInBackground,
+    onProgress: (data) => updateTaskDetail<TaskDetails, Clip>(queryClient, taskId, (current) => ({
+      ...current,
+      task: {
+        ...current.task,
+        ...(typeof data.progress === "number" ? { progress: data.progress } : {}),
+        ...(typeof data.message === "string" ? { progress_message: data.message } : {}),
+      },
+    })),
+    onClip: (clip) => updateTaskDetail<TaskDetails, Clip>(queryClient, taskId, (current) => ({
+      ...current,
+      clips: [...current.clips.filter((item) => item.id !== clip.id), clip].sort((a, b) => a.clip_order - b.clip_order),
+    })),
   });
 
   const runAction = async (name: string, action: () => Promise<void>) => {
@@ -499,7 +473,7 @@ export default function TaskPage() {
       });
 
       if (response.ok) {
-        setTask(task ? { ...task, source_title: editedTitle } : null);
+        updateTaskDetail<TaskDetails, Clip>(queryClient, taskId, (current) => ({ ...current, task: { ...current.task, source_title: editedTitle } }));
         setIsEditing(false);
       } else {
         toast.error(await buildSupportError(response, t("errors.updateTitle")));
@@ -509,6 +483,12 @@ export default function TaskPage() {
       toast.error(err instanceof Error ? err.message : t("errors.updateTitle"));
     }
   };
+
+  // A deleted task's cache goes once the page has left, so Back shows the server's answer, not the old task.
+  const taskDeleted = useRef(false);
+  useEffect(() => () => {
+    if (taskDeleted.current) forgetTaskDetail(queryClient, taskId);
+  }, [queryClient, taskId]);
 
   const handleDeleteTask = async () => {
     if (!session?.user?.id || !params.id) return;
@@ -521,6 +501,8 @@ export default function TaskPage() {
 
       if (response.ok) {
         removeTaskDrafts(String(params.id));
+        taskDeleted.current = true;
+        dropDeletedTaskFromLists(queryClient, taskId, session.user.id);
         router.push("/list");
       } else {
         toast.error(await buildSupportError(response, t("errors.deleteTask")));
@@ -544,7 +526,7 @@ export default function TaskPage() {
 
       if (response.ok) {
         removeTaskDrafts(String(params.id), clipId);
-        setClips(clips.filter((clip) => clip.id !== clipId));
+        updateTaskDetail<TaskDetails, Clip>(queryClient, taskId, (current) => ({ ...current, clips: current.clips.filter((clip) => clip.id !== clipId) }));
         setDeletingClipId(null);
       } else {
         toast.error(await buildSupportError(response, t("errors.deleteClip")));
@@ -554,6 +536,9 @@ export default function TaskPage() {
       toast.error(err instanceof Error ? err.message : t("errors.deleteClip"));
     }
   };
+
+  /** A clip job is queued or running: its clips are locked and no second re-render can be queued. */
+  const clipJobActive = Boolean(clipJob && !clipJob.error);
 
   const handleApplyProjectSettings = async () => {
     if (!session?.user?.id || !params.id) return;
@@ -567,6 +552,28 @@ export default function TaskPage() {
       .map((word) => word.trim().toLowerCase())
       .filter(Boolean);
 
+    // Sent only when it changed: an omitted style keeps the stored one, `{}` turns edits off.
+    const nextStyle = editStyleToJson(projectEditStyle);
+    const styleChanged = JSON.stringify(nextStyle) !== JSON.stringify(editStyleToJson(storedEditStyle));
+
+    await submitProjectSettings(JSON.stringify({
+      ...fontOptions,
+      caption_template: projectCaptionTemplate,
+      cut_long_pauses: projectCutLongPauses,
+      pause_threshold_ms: safePauseThreshold,
+      remove_filler_words: projectRemoveFillerWords,
+      // Omitted when B-roll isn't offered, so the task keeps its setting.
+      ...(brollAvailable ? { include_broll: projectIncludeBroll } : {}),
+      filtered_words: normalizedFilteredWords,
+      ...(styleChanged ? { edit_style: nextStyle } : {}),
+      apply_to_existing: true,
+    }), projectEditStyle);
+  };
+
+  /** Sends a settings body. "Try again" passes the failed job's own body, without `style` (it is stored already). */
+  const submitProjectSettings = async (body: string, style?: EditStyle) => {
+    // One re-render at a time: a second request would queue every clip again.
+    if (!params.id || isApplyingSettings || clipJobActive) return;
     setIsApplyingSettings(true);
     try {
       const response = await fetch(`${taskApiUrl}/${params.id}/settings`, {
@@ -574,29 +581,90 @@ export default function TaskPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          ...fontOptions,
-          caption_template: projectCaptionTemplate,
-          cut_long_pauses: projectCutLongPauses,
-          pause_threshold_ms: safePauseThreshold,
-          remove_filler_words: projectRemoveFillerWords,
-          // Omitted when B-roll isn't offered, so the task keeps its setting.
-          ...(brollAvailable ? { include_broll: projectIncludeBroll } : {}),
-          filtered_words: normalizedFilteredWords,
-          apply_to_existing: true,
-        }),
+        body,
       });
+      if (response.status === 409) {
+        // A re-render started somewhere else (another tab or device): follow that one instead of failing.
+        const refused = (await response.clone().json().catch(() => null)) as
+          { detail?: { code?: string; job_id?: string; kind?: string } } | null;
+        const inFlight = refused?.detail;
+        if (inFlight?.code === "CLIP_JOB_IN_PROGRESS" && inFlight.job_id) {
+          startClipJob({ id: inFlight.job_id, kind: inFlight.kind ?? "settings", clipIds: "all", progress: 0 });
+          setSettingsSheetOpen(false);
+          toast.message(t("fx.jobInProgress"));
+          return;
+        }
+      }
       if (!response.ok) {
         toast.error(await buildSupportError(response, t("errors.applySettings")));
         return;
       }
-      await fetchTaskStatus();
+      if (response.status === 202) {
+        // Clips with dynamic edits re-render on the video worker: mark them and poll the job.
+        const queued = (await response.json()) as { job_id?: string; kind?: string };
+        if (queued.job_id) startClipJob({ id: queued.job_id, kind: queued.kind ?? "settings", clipIds: "all", progress: 0, request: body });
+        if (style) setStoredEditStyle(style);
+        setSettingsSheetOpen(false);
+        toast.success(t("fx.queued"));
+        return;
+      }
+      await reloadTask();
       setSettingsSheetOpen(false);
       toast.success(t("toasts.settingsApplied"));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("errors.applySettings"));
     } finally {
       setIsApplyingSettings(false);
+    }
+  };
+
+  const startClipJob = useCallback((job: ClipJob) => {
+    if (params.id) storeClipJob(String(params.id), job);
+    setClipJob(job);
+  }, [params.id]);
+
+  // A job queued before a reload keeps being followed.
+  useEffect(() => {
+    if (!params.id) return;
+    const stored = readStoredClipJob(String(params.id));
+    if (stored) setClipJob(stored);
+  }, [params.id]);
+
+  const clipJobId = clipJob && !clipJob.error ? clipJob.id : null;
+  useEffect(() => {
+    if (!clipJobId || !params.id) return;
+    const taskId = String(params.id);
+    const fail = (error: string, retry?: (job: ClipJob) => ClipJob["retry"]) =>
+      setClipJob((current) => current && current.id === clipJobId ? { ...current, error, retry: retry?.(current) } : current);
+    return followClipJob(`${taskApiUrl}/${taskId}/clip-jobs/${clipJobId}`, {
+      onProgress: (progress) => setClipJob((current) => current && current.id === clipJobId ? { ...current, progress } : current),
+      onEnd: (end) => {
+        // Its status could not be read, but the job may still be running: it stays stored and can be followed again.
+        if (end.status === "unreachable") return fail(t("fx.jobUnreachable"), () => "resume");
+        storeClipJob(taskId, null);
+        if (end.status === "denied") return fail(t("fx.jobDenied"));
+        if (end.status === "failed") {
+          const known = end.code && t.has(`fx.jobErrors.${end.code}`) ? t(`fx.jobErrors.${end.code}`) : null;
+          return fail(t("fx.jobFailed", { message: known ?? (end.message || t("errors.applySettings")) }), (job) => (job.request ? "resend" : undefined));
+        }
+        setClipJob(null);
+        void refreshTaskInBackground().then(() => { if (end.status === "done") toast.success(t("fx.applied")); });
+      },
+    });
+  }, [clipJobId, params.id, taskApiUrl, refreshTaskInBackground, t]);
+
+  const dismissClipJob = () => {
+    if (params.id) storeClipJob(String(params.id), null);
+    setClipJob(null);
+  };
+  const retryClipJob = () => {
+    if (!clipJob?.error) return;
+    if (clipJob.retry === "resume") {
+      setClipJob({ ...clipJob, error: null, retry: undefined });
+    } else if (clipJob.retry === "resend" && clipJob.request) {
+      const { request } = clipJob;
+      setClipJob(null);
+      void submitProjectSettings(request);
     }
   };
 
@@ -613,8 +681,7 @@ export default function TaskPage() {
         throw new Error(await buildSupportError(response, t("errors.deleteFont")));
       }
 
-      const remainingFonts = availableFonts.filter((item) => item.name !== font.name);
-      setAvailableFonts(remainingFonts);
+      queryClient.setQueryData<FontOption[]>(taskPageKeys.fonts, (current) => current?.filter((item) => item.name !== font.name));
       if (projectFontFamily === font.name) {
         // The deleted font was in use — fall back to the caption template's own font.
         setProjectFontFamily(null);
@@ -701,7 +768,7 @@ export default function TaskPage() {
         return;
       }
       // Finished clips stay and the worker renders only what's missing.
-      await fetchTaskStatus();
+      await reloadTask();
       toast.success(t("toasts.retryQueued"));
     });
   };
@@ -713,7 +780,13 @@ export default function TaskPage() {
       const response = await fetch("/api/tasks/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildRecreateBody(task, { workflow, topic }, workflowsInfo?.workflows.find((entry) => entry.id === workflow)?.customizable !== false && workflowsInfo?.enabled !== false)),
+        body: JSON.stringify(buildRecreateBody(
+          task,
+          { workflow, topic },
+          workflowsInfo?.workflows.find((entry) => entry.id === workflow)?.customizable !== false && workflowsInfo?.enabled !== false,
+          // The task's dynamic edits carry over only while they're on for this user (same sanitiser as the create screen).
+          editStylesInfo,
+        )),
       });
       if (!response.ok) {
         const info = await parseApiError(response, t("errors.createTask"));
@@ -744,9 +817,7 @@ export default function TaskPage() {
 
       const data = (await response.json()) as { share_path: string };
       const shareUrl = new URL(data.share_path, window.location.origin).toString();
-      setTask((currentTask) =>
-        currentTask ? { ...currentTask, share_enabled: true } : currentTask,
-      );
+      updateTaskDetail<TaskDetails, Clip>(queryClient, taskId, (current) => ({ ...current, task: { ...current.task, share_enabled: true } }));
       const outcome = await copyText(shareUrl);
       if (outcome !== "copied") {
         setShareState("idle");
@@ -771,9 +842,7 @@ export default function TaskPage() {
       if (!response.ok) {
         throw new Error(await buildSupportError(response, t("errors.disableShare")));
       }
-      setTask((currentTask) =>
-        currentTask ? { ...currentTask, share_enabled: false } : currentTask,
-      );
+      updateTaskDetail<TaskDetails, Clip>(queryClient, taskId, (current) => ({ ...current, task: { ...current.task, share_enabled: false } }));
     } catch (revokeError) {
       toast.error(revokeError instanceof Error ? revokeError.message : t("errors.disableShare"));
     } finally {
@@ -781,8 +850,8 @@ export default function TaskPage() {
     }
   };
 
-  if (isLoading) return <PageLoading />;
-  if (error) return <PageError message={error} retry={() => void fetchTaskStatus()} />;
+  if (taskQuery.isPending) return <PageLoading />;
+  if (error) return <PageError message={error} retry={() => void reloadTask()} />;
 
   const readOnly = Boolean(session?.user?.id && task?.user_id && session.user.id !== task.user_id);
   const sourceVideoUrl = task ? originalVideoUrl(task) : null;
@@ -839,6 +908,22 @@ export default function TaskPage() {
     return values ? [{ code: note.code, text: t(`workflowNotes.${note.code}`, values) }] : [];
   });
 
+  // Dynamic edits in the restyle sheet: offered while the flag is on, and always to a task that already has them
+  // (turning them off or keeping them is never gated).
+  const editsOffered = fxEnabled || storedEditStyle.intensity !== "off";
+  const sheetIntensities = fxEnabled ? INTENSITIES : INTENSITIES.filter((level) => level === "off" || level === storedEditStyle.intensity);
+  const offeredFx = new Set<string>(offeredFxTemplates(editStylesInfo));
+  // Animated templates appear only while dynamic edits are on, plus the task's own (so its name still shows).
+  const sheetTemplates = availableTemplates.filter((template) => !isFxTemplate(template.id) || offeredFx.has(template.id) || template.id === task?.caption_template);
+  const templateName = (id: string) => {
+    const key = `animatedCaptions.templates.${id}.name`;
+    return isFxTemplate(id) && tHome.has(key) ? tHome(key) : availableTemplates.find((template) => template.id === id)?.name;
+  };
+  const templateDescription = (id: string) => {
+    const key = `animatedCaptions.templates.${id}.description`;
+    return isFxTemplate(id) && tHome.has(key) ? tHome(key) : undefined;
+  };
+
   const formatSelect = (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <span className="hidden sm:inline">{t("downloadAs")}</span>
@@ -852,7 +937,10 @@ export default function TaskPage() {
     </div>
   );
 
-  const publishButton = (clip: Clip, compact = false) => task?.status === "completed" ? (
+  // One lock for every view: a clip being re-rendered can't be edited, deleted, published or opened in the studio.
+  const renderingClip = (clip: Clip) => Boolean(clipJob && clipJobActive && (clipJob.clipIds === "all" || clipJob.clipIds.includes(clip.id)));
+
+  const publishButton = (clip: Clip, compact = false) => task?.status === "completed" && !renderingClip(clip) ? (
     <ClipPublishButton
       taskId={task.id}
       clip={clip}
@@ -863,7 +951,26 @@ export default function TaskPage() {
     />
   ) : null;
 
-  const renderTile = (clip: Clip, index: number) => (
+  const focusedRendering = focusedClip ? renderingClip(focusedClip) : false;
+  const renderTile = (clip: Clip, index: number) => renderingClip(clip) ? (
+    <div key={clip.id} className="relative" aria-busy="true">
+      <ClipTile
+        clip={clip}
+        taskId={task?.id ?? String(params.id)}
+        busy
+        best={bestScore > 0 && clip.virality_score === bestScore}
+        partTotal={partTotal}
+        onOpen={() => setFocusIndex(index)}
+        onDownload={() => handleDownloadClip(clip)}
+        editable={false}
+      />
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex aspect-[9/16] items-center justify-center rounded-xl bg-background/60 backdrop-blur-[2px]">
+        <span className="flex items-center gap-1.5 rounded-full bg-background/90 px-2.5 py-1 text-xs font-medium shadow-sm">
+          <Loader2 className="size-3.5 animate-spin" />{t("fx.rendering")}
+        </span>
+      </div>
+    </div>
+  ) : (
     <ClipTile
       key={clip.id}
       clip={clip}
@@ -939,6 +1046,11 @@ export default function TaskPage() {
                   {new Date(task.created_at).toLocaleString(intlLocale(locale), { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}
                 </TooltipContent>
               </Tooltip>
+              {task.source_start_seconds != null && task.source_end_seconds != null && (
+                <span className="tabular-nums" data-testid="source-range">
+                  {t("sourceRange", { start: formatClock(task.source_start_seconds), end: formatClock(task.source_end_seconds) })}
+                </span>
+              )}
               {isActive && task.source_duration_seconds ? <span className="tabular-nums">{t("sourceLength", { duration: formatDuration(task.source_duration_seconds) })}</span> : null}
               {clips.length > 0 && (
                 <span className="tabular-nums">
@@ -971,7 +1083,7 @@ export default function TaskPage() {
               <Button size="sm" variant="outline" disabled={pendingAction !== null}
                 onClick={() => void runAction("cancel", async () => {
                   await requestAction(`${taskApiUrl}/${task.id}/cancel`, "POST");
-                  await fetchTaskStatus();
+                  await reloadTask();
                   toast.success(t("toasts.cancelled"));
                 })}>
                 {t("cancel")}
@@ -1003,7 +1115,7 @@ export default function TaskPage() {
               <DropdownMenuContent align="end">
                 {hasClips && (
                   <>
-                    <DropdownMenuItem onSelect={() => setSettingsSheetOpen(true)}>
+                    <DropdownMenuItem onSelect={() => setSettingsSheetOpen(true)} disabled={clipJobActive}>
                       <Settings2 />{t("restyle")}
                     </DropdownMenuItem>
                     {task.share_enabled && (
@@ -1029,6 +1141,27 @@ export default function TaskPage() {
           <p role="status" className="mb-4 text-sm text-muted-foreground">{t("alreadyProcessing")}</p>
         )}
         {reconnecting && <p role="status" className="mb-4 text-sm text-muted-foreground">{readOnly ? t("reconnectingOther") : t("reconnectingOwn")}</p>}
+        {clipJob && (
+          clipJob.error ? (
+            <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-4">
+              <p className="text-sm">{clipJob.error}</p>
+              <span className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={dismissClipJob}>{t("cancel")}</Button>
+                {clipJob.retry && (
+                  <Button size="sm" onClick={retryClipJob} disabled={isApplyingSettings || clipJobActive}>
+                    <RotateCcw className="size-4" />{t("fx.retry")}
+                  </Button>
+                )}
+              </span>
+            </div>
+          ) : (
+            <div role="status" className="mb-6 flex items-center gap-3 rounded-lg border bg-muted/40 p-3 text-sm">
+              <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+              <span className="min-w-0 flex-1">{t("fx.rendering")}</span>
+              {clipJob.progress > 0 && <span className="tabular-nums text-muted-foreground">{Math.round(clipJob.progress * 100)}%</span>}
+            </div>
+          )
+        )}
 
         {isActive && task ? (
           <div className="space-y-8">
@@ -1074,6 +1207,7 @@ export default function TaskPage() {
             taskId={task.id}
             status={task.status}
             editable={task.status === "completed" && !readOnly}
+            locked={renderingClip}
             busyId={pendingAction}
             downloadingAll={isDownloadingAll}
             toolbar={formatSelect}
@@ -1092,8 +1226,8 @@ export default function TaskPage() {
               clip={heroClip}
               plan={plan}
               taskId={task.id}
-              editable={task.status === "completed" && !readOnly}
-              busy={pendingAction === heroClip.id}
+              editable={task.status === "completed" && !readOnly && !renderingClip(heroClip)}
+              busy={pendingAction === heroClip.id || renderingClip(heroClip)}
               onDownload={() => handleDownloadClip(heroClip)}
               actions={publishButton(heroClip)}
             />
@@ -1118,7 +1252,7 @@ export default function TaskPage() {
               {sortable ? (
                 <div className="inline-flex rounded-lg border bg-background p-0.5" role="tablist" aria-label={t("sortLabel")}>
                   {(["score", "timeline"] as const).map((value) => (
-                    <button key={value} type="button" role="tab" aria-selected={sortBy === value} onClick={() => setSortBy(value)}
+                    <button key={value} type="button" role="tab" aria-selected={sortBy === value} onClick={() => { sortChosen.current = true; setSortBy(value); }}
                       className={cn("h-7 rounded-md px-3 text-xs font-medium transition-all active:scale-95", sortBy === value ? "bg-foreground text-background shadow-xs" : "text-muted-foreground hover:text-foreground")}>
                       {t(`sort.${value}`)}
                     </button>
@@ -1155,15 +1289,20 @@ export default function TaskPage() {
         taskId={task?.id ?? String(params.id)}
         index={focusIndex ?? 0}
         total={sortedClips.length}
-        busy={focusedClip ? pendingAction === focusedClip.id : false}
-        editable={task?.status === "completed" && !readOnly}
+        busy={focusedClip ? pendingAction === focusedClip.id || focusedRendering : false}
+        editable={task?.status === "completed" && !readOnly && !focusedRendering}
         onNavigate={(delta) => setFocusIndex((i) => (i === null ? i : (i + delta + sortedClips.length) % sortedClips.length))}
         onClose={() => setFocusIndex(null)}
         onDownload={() => focusedClip && handleDownloadClip(focusedClip)}
-        onDelete={readOnly ? undefined : () => { if (focusedClip) { setDeletingClipId(focusedClip.id); setFocusIndex(null); } }}
+        onDelete={readOnly || focusedRendering ? undefined : () => { if (focusedClip) { setDeletingClipId(focusedClip.id); setFocusIndex(null); } }}
         hookTypeLabel={getHookTypeLabel}
         actions={focusedClip ? publishButton(focusedClip) : null}
       >
+        {focusedClip && clipFxNotes(focusedClip.fx_meta).length > 0 && (
+          <ul className="space-y-1 text-xs text-muted-foreground">
+            {clipFxNotes(focusedClip.fx_meta).map((note) => <li key={note}>{t(`fx.${note}`)}</li>)}
+          </ul>
+        )}
         {focusedClip && (
           <ClipPostList
             posts={socialPosts.filter((post) => post.clip_id === focusedClip.id)}
@@ -1241,15 +1380,15 @@ export default function TaskPage() {
                 <Select value={projectCaptionTemplate} onValueChange={setProjectCaptionTemplate}>
                   <SelectTrigger>
                     <SelectValue>
-                      {availableTemplates.find((template) => template.id === projectCaptionTemplate)?.name || t("selectStyle")}
+                      {templateName(projectCaptionTemplate) || t("selectStyle")}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {availableTemplates.map((template) => (
+                    {sheetTemplates.map((template) => (
                       <SelectItem key={template.id} value={template.id}>
                         <div>
-                          <div className="font-medium">{template.name}</div>
-                          <div className="text-xs text-muted-foreground">{template.description}</div>
+                          <div className="font-medium">{templateName(template.id) || template.name}</div>
+                          <div className="text-xs text-muted-foreground">{templateDescription(template.id) || template.description}</div>
                         </div>
                       </SelectItem>
                     ))}
@@ -1257,6 +1396,42 @@ export default function TaskPage() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {editsOffered && (
+                <div className="space-y-3 rounded-lg border bg-muted p-3">
+                  <div>
+                    <label htmlFor="project-intensity" className="text-sm font-medium text-foreground">{t("fx.intensity")}</label>
+                    <p className="text-xs text-muted-foreground">{t("fx.intensityHint")}</p>
+                  </div>
+                  <Select value={projectEditStyle.intensity} onValueChange={(value) => setProjectEditStyle((style) => ({ ...style, intensity: value as Intensity }))}>
+                    <SelectTrigger id="project-intensity" className="w-full bg-background"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {sheetIntensities.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          <div>
+                            <div className="font-medium">{tHome(`edits.intensity.${level}.label`)}</div>
+                            <div className="text-xs text-muted-foreground">{tHome(`edits.intensity.${level}.hint`)}</div>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {projectEditStyle.intensity !== "off" && (
+                    <div className="divide-y divide-border/70">
+                      {SHEET_FX_TOGGLES.map((key) => (
+                        <div key={key} className="flex items-center justify-between gap-3 py-2">
+                          <label htmlFor={`project-fx-${key}`} className="text-sm text-foreground/80">{tHome(`edits.options.${key}.label`)}</label>
+                          <Switch
+                            id={`project-fx-${key}`}
+                            checked={projectEditStyle[key]}
+                            onCheckedChange={(checked) => setProjectEditStyle((style) => ({ ...style, [key]: checked }))}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {brollAvailable && (
                 <div className="rounded-lg border bg-muted p-3 space-y-2">
@@ -1329,7 +1504,7 @@ export default function TaskPage() {
               <Button
                 className="w-full"
                 onClick={handleApplyProjectSettings}
-                disabled={isApplyingSettings}
+                disabled={isApplyingSettings || clipJobActive}
               >
                 {isApplyingSettings ? t("applying") : t("apply")}
               </Button>

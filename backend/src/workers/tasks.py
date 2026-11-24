@@ -89,7 +89,11 @@ async def process_video_task(
     progress = ProgressTracker(ctx["redis"], task_id)
 
     async with AsyncSessionLocal() as db:
+        from ..repositories.task_repository import TaskRepository
+
         await load_runtime_settings_cache(db)
+        task_record = await TaskRepository.get_task_by_id(db, task_id)
+        task_team_id = task_record.get("team_id") if task_record else None
         decision = await admit_video_job(
             ctx, db, task_id=task_id, user_id=user_id, job_args=job_args, url=url
         )
@@ -99,7 +103,13 @@ async def process_video_task(
 
         # An upload this machine cannot read yet goes back on the queue.
         decision = await hold_for_upload(
-            ctx, db, task_id=task_id, user_id=user_id, url=url, job_args=job_args
+            ctx,
+            db,
+            task_id=task_id,
+            user_id=user_id,
+            url=url,
+            job_args=job_args,
+            team_id=task_team_id,
         )
         if decision != "run":
             if decision == "failed":
@@ -185,11 +195,13 @@ async def process_video_task(
             raise
         finally:
             # The slot is held only while this process is actually rendering.
-            await release_video_slot(ctx["redis"], user_id, task_id)
-            # Hand it to the account's next task now instead of after its deferral.
+            await release_video_slot(ctx["redis"], user_id, task_id, team_id=task_team_id)
+            # Hand it to the workspace's next task now instead of after its deferral.
             try:
                 async with AsyncSessionLocal() as wake_db:
-                    await wake_next_video_jobs(wake_db, ctx["redis"], user_id)
+                    await wake_next_video_jobs(
+                        wake_db, ctx["redis"], user_id, team_id=task_team_id
+                    )
             except Exception:
                 logger.exception("Could not wake the next video task after task %s", task_id)
 
@@ -310,7 +322,14 @@ async def _maintain_scratch_forever() -> None:
 async def on_worker_startup(ctx: Dict[str, Any]) -> None:
     import asyncio
 
+    from .redis_settings import use_socket_options
+
+    await use_socket_options(ctx["redis"])
     await check_media_volume(ctx["redis"])
+    hold = overflow.overflow_after_seconds()
+    if hold:
+        overflow.take_only_overflow(ctx["redis"], DEFAULT_QUEUE_NAME, hold)
+        logger.info("Overflow worker: takes video jobs once they have waited %s s", hold)
     ctx["scratch_maintenance"] = asyncio.create_task(_maintain_scratch_forever())
 
 
@@ -327,12 +346,15 @@ async def on_worker_shutdown(ctx: Dict[str, Any]) -> None:
 
 
 from ..services.editor_service import prepare_editor, export_editor, combine_editor
+from ..services.editor_fx_analysis import ANALYSIS_JOB_TIMEOUT_SECONDS, editor_fx_analysis
+from ..services.fx_clip_jobs import FX_CLIP_JOB_TIMEOUT_SECONDS, fx_clip_job
 from ..services.clip_export_service import (
     CLIP_EXPORT_JOB_TIMEOUT_SECONDS,
     export_clip_preset,
 )
 from ..services.social_service import PUBLISH_JOB_TIMEOUT_SECONDS
-from . import host_jobs
+from . import host_jobs, overflow
+from .job_queue import DEFAULT_QUEUE_NAME
 from .queue_delay import on_video_job_start
 
 
@@ -347,7 +369,7 @@ class WorkerSettings:
     """Configuration for arq worker."""
 
     from ..config import Config
-    from arq.connections import RedisSettings
+    from .redis_settings import arq_redis_settings
 
     config = Config()
 
@@ -357,6 +379,11 @@ class WorkerSettings:
         prepare_editor,
         export_editor,
         combine_editor,
+        # Studio face track and person matte (dynamic edits). Idempotent per media version, so a retry is safe.
+        func(editor_fx_analysis, timeout=ANALYSIS_JOB_TIMEOUT_SECONDS, max_tries=2),
+        # Clip edits that re-render dynamic-edits clips (settings, captions, trim, split, merge; §13.0). One try:
+        # a retry would render the edit twice. The job keeps its own max(1800, 120 x clips) budget inside this cap.
+        func(fx_clip_job, timeout=FX_CLIP_JOB_TIMEOUT_SECONDS, max_tries=1),
         # One try: a lost running export is failed by the heartbeat sweep, and a
         # retry would start a second encode for the same row.
         func(
@@ -372,9 +399,7 @@ class WorkerSettings:
     health_check_interval = 30
 
     # Redis settings from environment
-    redis_settings = RedisSettings(
-        host=config.redis_host, port=config.redis_port, password=config.redis_password, database=0
-    )
+    redis_settings = arq_redis_settings(config)
 
     # Retry settings
     max_tries = 3  # Retry failed jobs up to 3 times

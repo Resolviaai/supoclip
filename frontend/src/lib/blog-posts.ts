@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
+import type { Locale } from "@/i18n/config";
 import { getSiteUrl } from "@/lib/site";
 import { creatorGuides } from "@/lib/creator-guides";
+import {
+  GUIDE_LOCALES,
+  getLocalizedBlogPostCopy,
+  resolveContentLocale,
+} from "@/lib/localized-guides";
 
 export { HOSTED_APP_URL, getSiteUrl } from "@/lib/site";
 
 export interface BlogPost {
-  /** Set for editorial content not yet translated; do not localize only its title. */
-  language?: "en";
+  /** Locales in which this editorial post is translated; omit when covered in all app locales via `messages/<locale>/blog.json`. */
+  languages?: readonly Locale[];
   slug: string;
   image?: { src: string; alt: string; width: number; height: number };
   title: string;
@@ -23,7 +29,7 @@ export interface BlogPost {
 
 export const blogPosts: BlogPost[] = [
   {
-    language: "en",
+    languages: GUIDE_LOCALES,
     slug: "how-to-clip-gta-6",
     image: { src: "/blog/how-to-clip-gta-6.webp", alt: "Illustration of a GTA-style sunset stream with a webcam inset turning into three vertical captioned clips", width: 1672, height: 941 },
     title: "How to Clip GTA 6 (and What It Really Pays)",
@@ -38,7 +44,7 @@ export const blogPosts: BlogPost[] = [
     summary: "Everyone is clipping GTA 6. Here is what it pays, which clips get taken down, and the workflow from a four-hour stream to vertical clips worth posting.",
   },
   {
-    language: "en",
+    languages: ["en"],
     slug: "tiktok-publishing-is-live",
     title: "TikTok publishing is now live in SupoClip",
     description: "Publish clips straight to TikTok, select TikTok and YouTube together on the web, and schedule ahead on Creator. Here’s how to get started.",
@@ -50,6 +56,34 @@ export const blogPosts: BlogPost[] = [
     author: "SupoClip",
     keywords: ["SupoClip TikTok publishing", "publish clips to TikTok", "TikTok and YouTube publishing", "schedule TikTok posts"],
     summary: "Your finished clips can now go straight to TikTok. Connect your account, pick a clip, and publish from SupoClip—without downloading and uploading it again.",
+  },
+  {
+    languages: ["en"],
+    slug: "supoclip-vs-opusclip-klap-vizard",
+    title: "SupoClip vs OpusClip vs Klap vs Vizard: Pricing and Features Compared",
+    description: "SupoClip, OpusClip, Klap and Vizard compared on free plans, pricing per hour or clip, exports, imports, publishing and APIs, with a source for every claim.",
+    eyebrow: "AI clipper comparison",
+    category: "Comparison",
+    publishedAt: "2026-11-24",
+    updatedAt: "2026-11-24",
+    readingTime: "9 min read",
+    author: "SupoClip",
+    keywords: ["SupoClip vs OpusClip", "OpusClip vs Klap", "OpusClip vs Vizard", "Klap vs Vizard", "OpusClip alternative", "Klap alternative", "Vizard alternative", "best AI clipping tool"],
+    summary: "Four AI clippers, four ways to charge. Here is what each costs per hour of video or per clip, what the free plans really include, and which one fits how you work.",
+  },
+  {
+    languages: ["en"],
+    slug: "free-opusclip-alternatives",
+    title: "Best Free OpusClip Alternatives in 2026 (Free Tiers Checked)",
+    description: "Free OpusClip alternatives compared: the real free tiers of Reap, Quso, Vizard, CapCut, YouTube Studio and more, plus open-source clippers with no watermark or minute cap.",
+    eyebrow: "OpusClip alternatives",
+    category: "Comparison",
+    publishedAt: "2026-11-24",
+    updatedAt: "2026-11-24",
+    readingTime: "11 min read",
+    author: "SupoClip",
+    keywords: ["free OpusClip alternatives", "best free OpusClip alternative", "OpusClip alternative free", "free AI clip maker", "free AI video clipper no watermark", "open source OpusClip alternative"],
+    summary: "We read the pricing page of every hosted clipper with a free plan and the repositories of the open-source ones. Here is what free actually gets you, and where each one stops.",
   },
   ...creatorGuides.map((guide) => guide.post),
   {
@@ -136,9 +170,25 @@ export function getBlogPost(slug: string) {
   return blogPosts.find((post) => post.slug === slug);
 }
 
-/** Overlay translated title, description, and listing copy. Keywords stay English. */
-export function applyBlogCopy(post: BlogPost, translate: (key: string) => string): BlogPost {
-  if (post.language) return post;
+/** Overlay translated title, description, and listing copy for supported locales. */
+export function applyBlogCopy(post: BlogPost, translate: (key: string) => string, locale?: string): BlogPost {
+  if (post.languages) {
+    const resolved = resolveContentLocale(post.languages, locale);
+    if (resolved === "en") return post;
+    const copy = getLocalizedBlogPostCopy(post.slug, resolved);
+    if (!copy) return post;
+    return {
+      ...post,
+      title: copy.title,
+      description: copy.description,
+      eyebrow: copy.eyebrow,
+      category: copy.category,
+      readingTime: copy.readingTime,
+      summary: copy.summary,
+      keywords: copy.keywords ?? post.keywords,
+      image: post.image ? { ...post.image, alt: copy.imageAlt ?? post.image.alt } : undefined,
+    };
+  }
   const slug = post.slug;
   return {
     ...post,

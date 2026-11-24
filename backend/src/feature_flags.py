@@ -32,6 +32,8 @@ CACHE_TTL_SECONDS = 15.0
 
 WORKFLOWS = "workflows"
 TIKTOK_PUBLISHING = "tiktok_publishing"
+INSTAGRAM_PUBLISHING = "instagram_publishing"
+DYNAMIC_EDITS = "dynamic_edits"
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,8 @@ class FeatureFlag:
 DEFAULT_FLAGS: dict[str, FeatureFlag] = {
     WORKFLOWS: FeatureFlag(WORKFLOWS, web_enabled=True, ios_enabled=True),
     TIKTOK_PUBLISHING: FeatureFlag(TIKTOK_PUBLISHING, admins_bypass=False),
+    INSTAGRAM_PUBLISHING: FeatureFlag(INSTAGRAM_PUBLISHING),
+    DYNAMIC_EDITS: FeatureFlag(DYNAMIC_EDITS),
 }
 
 _cache: Optional[tuple[float, dict[str, FeatureFlag]]] = None

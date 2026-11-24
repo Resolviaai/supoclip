@@ -11,8 +11,10 @@ is the default for self-hosted installs.
 | Desktop (Electron) | analytics, session replay, exceptions | — |
 | iOS | analytics, crashes | — |
 
-Production uses the PostHog project **SupoClip** (EU cloud, project id
-`314504`) and the Axiom dataset **`supoclip-prod`** (org `supoclip-tjzv`).
+Production uses the PostHog project **SupoClip** (self-hosted at
+`https://ph.supoclip.com`, project id `1`) and the Axiom dataset **`supoclip-prod`**
+(org `supoclip-tjzv`). Data from before 2026-11-24 stays in the old EU cloud project
+`314504`.
 
 ## Following an error from PostHog to the logs
 
@@ -81,6 +83,9 @@ Names and properties are typed in one place per side:
 | `source_entered` | A supported link is in the create composer, or a video file was picked; once per distinct source | `source_kind` (`youtube`, `twitch`, `kick`, `upload`) |
 | `generate_clicked` | Generate pressed with a valid request, before the plan check | `workflow`, `source_kind` (or `unknown`), `has_instructions`, `blocked_by_upgrade` |
 | `upgrade_dialog_shown` | The upgrade dialog opens | `reason` (`start`, `limit`, `video_too_long`, `custom_fonts`, `explore`), `plan`, `source` |
+| `video_too_long_shown` | The create page refused a video for its length (`VIDEO_TOO_LONG`, or an upload over the limit) and showed the range picker and/or upgrade; once per video | `source_kind`, `plan`, `duration_minutes`, `max_minutes`, `range_offered`, `upgrade_offered` |
+| `source_range_chosen` | A task was created for a picked part of such a video | `source_kind`, `plan`, `range_minutes`, `start_minutes`, `duration_minutes` |
+| `video_too_long_upgrade_clicked` | "Upgrade to …" in that prompt, before checkout opens (then `checkout_started` on the server) | `plan`, `target_plan`, `duration_minutes` |
 | `editor_opened` | The clip studio loaded a finished task; once per task | `clip_count` |
 | `ai_edit_submitted` | The studio accepted an AI edit, or refused it at the daily limit | `outcome` (`accepted`, `limit_reached`) |
 | `clip_downloaded` | A clip download started from the task page or studio | `surface` (`task`, `editor`, `editor_queue`), `format` (preset or `original`) |

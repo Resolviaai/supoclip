@@ -157,7 +157,7 @@
     },
     "cost": {
       "heading": "Cost: free source code, real operating costs",
-      "p1": "SupoClip is free to self-host for noncommercial use. Your actual costs depend on compute, storage, transcription, paid model usage, and the time needed to maintain the installation. Capacity follows the resources you provision and provider limits. This can be attractive for teams that already run infrastructure, but it is not a promise that every workload costs less.",
+      "p1": "SupoClip is free to self-host for noncommercial use and for individual creators, including on monetized channels. Your actual costs depend on compute, storage, transcription, paid model usage, and the time needed to maintain the installation. Capacity follows the resources you provision and provider limits. This can be attractive if you already run infrastructure, but it is not a promise that every workload costs less. Companies and agencies need written permission to self-host.",
       "p2": "The hosted SupoClip service is a separate option with its own pricing and terms. Choose it when you want to start with less setup; choose self-hosting when control over the deployment is the priority."
     },
     "choose": {
@@ -184,7 +184,7 @@
       },
       "1": {
         "question": "Is SupoClip free to self-host?",
-        "answer": "SupoClip allows noncommercial self-hosting and forks. Commercial use requires prior written permission from Shiori LLC. Running it still involves hardware or hosting, storage, transcription, and any paid LLM usage. Hosted SupoClip has its own service terms and pricing."
+        "answer": "SupoClip allows noncommercial self-hosting and forks, and individual creators can self-host it to make clips for their own monetized channels. Companies, agencies, client work, and paid hosting require prior written permission from Shiori LLC. Running it still involves hardware or hosting, storage, transcription, and any paid LLM usage. Hosted SupoClip has its own service terms and pricing."
       },
       "2": {
         "question": "Can SupoClip replace live-stream clipping and automatic posting?",
@@ -223,7 +223,7 @@
       },
       "2": {
         "question": "Does hosted SupoClip have a free plan?",
-        "answer": "No. The hosted app requires a Pro or Creator subscription to process videos. For noncommercial use, the free route is self-hosting, where there are no plan limits; you pay only for your own infrastructure and any AI providers you configure."
+        "answer": "No. The hosted app requires a Pro or Creator subscription to process videos. For noncommercial use, and for individual creators posting to their own channels, the free route is self-hosting, where there are no plan limits; you pay only for your own infrastructure and any AI providers you configure."
       },
       "3": {
         "question": "Which one is faster or makes better clips?",
@@ -330,7 +330,7 @@
     "faqs": {
       "0": {
         "question": "Is self-hosted SupoClip free?",
-        "answer": "SupoClip allows noncommercial self-hosting and forks. Commercial use requires prior written permission from Shiori LLC. You still pay for your own hardware or server, and for any cloud transcription or LLM usage you configure. A Whisper + Ollama setup avoids per-request AI fees but needs enough local compute."
+        "answer": "SupoClip allows noncommercial self-hosting and forks, and individual creators can self-host it to make clips for their own monetized channels. Companies, agencies, client work, and paid hosting require prior written permission from Shiori LLC. You still pay for your own hardware or server, and for any cloud transcription or LLM usage you configure. A Whisper + Ollama setup avoids per-request AI fees but needs enough local compute."
       },
       "1": {
         "question": "Can SupoClip run without any cloud AI services?",
@@ -438,7 +438,7 @@
       "li5": "<strong>Change the database password.</strong> <code>docker-compose.yml</code> hardcodes <code>supoclip_password</code> in four places: <code>POSTGRES_PASSWORD</code> in the <code>postgres</code> service and <code>DATABASE_URL</code> in the <code>frontend</code>, <code>backend</code>, and <code>worker</code> services. Editing <code>POSTGRES_PASSWORD</code> in <code>.env</code> alone changes none of them. Override all four, as shown below.",
       "li6": "<strong>Set <code>REDIS_PASSWORD</code></strong>; the Redis container enables AUTH when it is non-empty.",
       "li7": "<strong>Close sign-ups</strong> with <code>DISABLE_SIGN_UP=true</code> if the instance is just for your team.",
-      "li8": "<strong>Review the limits:</strong> <code>MAX_VIDEO_DURATION</code> (default 5400 s, 90 minutes) and <code>MAX_VIDEO_UPLOAD_BYTES</code> (default 4 GB).",
+      "li8": "<strong>Review upload size limits:</strong> <code>MAX_VIDEO_UPLOAD_BYTES</code> (default 4 GB). Self-hosted installs have no video length limit.",
       "labelReset": "docker-compose.override.yml (Compose v2.24+)",
       "passwordIntro": "For the database password, put a new value in <code>POSTGRES_PASSWORD</code> in <code>.env</code>. Generate it with <code>openssl rand -hex 24</code>, because hex needs no escaping inside a URL. Then point all four settings at it in the same override file:",
       "labelPassword": "docker-compose.override.yml (merge into any override you already have)",
@@ -557,11 +557,11 @@
     "faqs": {
       "0": {
         "question": "Is a self-hosted OpusClip alternative really free?",
-        "answer": "SupoClip allows noncommercial self-hosting and forks. Commercial use requires prior written permission from Shiori LLC. You still provide compute, storage, maintenance, and any paid transcription or AI usage. Compare those costs with a hosted plan before deciding."
+        "answer": "SupoClip allows noncommercial self-hosting and forks, and individual creators can self-host it to make clips for their own monetized channels. Companies, agencies, client work, and paid hosting require prior written permission from Shiori LLC. You still provide compute, storage, maintenance, and any paid transcription or AI usage. Compare those costs with a hosted plan before deciding."
       },
       "1": {
         "question": "Is SupoClip completely free?",
-        "answer": "Noncommercial self-hosting has no license fee or plan limits. Commercial use requires prior written permission from Shiori LLC. You still pay for your own infrastructure and any transcription or LLM provider you configure. The hosted app requires a paid plan."
+        "answer": "Self-hosting has no license fee or plan limits for noncommercial use or for individual creators, including on monetized channels. Companies, agencies, client work, and paid hosting require prior written permission from Shiori LLC. You still pay for your own infrastructure and any transcription or LLM provider you configure. The hosted app requires a paid plan."
       },
       "2": {
         "question": "Does SupoClip add a watermark?",

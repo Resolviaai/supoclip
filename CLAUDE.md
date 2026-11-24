@@ -21,7 +21,7 @@ How to write instead:
 
 ## Project Overview
 
-SupoClip is an open-source alternative to OpusClip — an AI-powered video clipping tool that transforms long-form content into viral short clips. Licensed under the SupoClip Noncommercial Source License. Keep the copies in `backend/` and `mcp/` in sync with the root `LICENSE` for packaging.
+SupoClip is an open-source alternative to OpusClip — an AI-powered video clipping tool that transforms long-form content into viral short clips. Licensed under the SupoClip Noncommercial Source License (v1.1: noncommercial use plus monetized use by individual creators; companies, agencies, client work and paid hosting need written permission). Keep the copies in `backend/` and `mcp/` in sync with the root `LICENSE` for packaging.
 
 ## Development Commands
 
@@ -112,13 +112,14 @@ utils/               → Thread pool helpers for blocking operations (async_help
 1. **Input** → YouTube URL (yt-dlp) or uploaded file
 2. **Transcription** → AssemblyAI word-level timestamps (cached as `.transcript_cache.json`)
 3. **AI Analysis** → Pydantic AI selects viral segments (15-60s each) with virality scoring. Transcripts over 15 min are analysed in 12-min windows (2-min overlap, 3 concurrent), deduplicated, then reranked together in one comparative call (`RERANK_LLM`, default `LLM`); final count scales ~1 clip per 5 min, capped by `MAX_CLIPS` (default 10)
-4. **Clip Generation** → MoviePy creates 9:16 clips with:
-   - Face-centered cropping: MediaPipe → OpenCV DNN → Haar cascade (fallback chain)
+4. **Clip Generation** → ffmpeg filter graphs (`media/reframing.py`, `media/ffmpeg.py`) render 9:16 clips with:
+   - Face-centered cropping: YuNet (`cv2.FaceDetectorYN`, `media/face_detection.py`) → Haar cascade fallback
    - Word-synced subtitles from AssemblyAI
    - Custom fonts (TTF files in `backend/fonts/`)
    - Optional transition effects (`backend/transitions/`)
    - Optional B-roll overlays (Pexels API)
    - Caption templates with animation styles
+   - Optional dynamic edits (see below): FX clips render through `media/fx_chain.py`
 5. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL
 
 ### Frontend Architecture
@@ -161,13 +162,18 @@ PostgreSQL 15. Schema in `init.sql`. Mixed naming conventions:
 | `src/local_volume.py` | Id of the disk behind `TEMP_DIR`; tags rows that name a local path |
 | `src/media_replication_ledger.py`, `src/sync_db.py` | Pending two-bucket replication in PostgreSQL, usable from boto threads |
 | `src/ai.py` | Pydantic AI agents, system prompt, segment validation |
-| `src/video_utils.py` | Video processing, cropping, subtitles (~820 lines) |
+| `src/video_utils.py` | Clip render composition, FX render ladder (`create_optimized_clip`), subtitles |
 | `src/clip_editor.py` | Clip trim, split, merge, export presets |
 | `src/editor_document.py` | Clip studio draft model (segments, words, captions, framing, B-roll) and server render |
 | `src/workflows/` | Workflows (series, topic, recap, trailer): contracts, options/gate, units, outline, planners, solvers |
 | `src/services/ai_edit_service.py` | Studio AI editing: Sonnet 5.5 plans typed operations, applied and validated here |
 | `src/workers/ai_worker.py` | Light ARQ worker for AI edits (`supoclip_ai` queue, own container) |
 | `src/broll.py` | Pexels API B-roll integration |
+| `src/edit_fx/` | Dynamic edits: contracts, beats (`beats_llm.py`, `beats.py`), pure resolver, env (`env.py`), assets |
+| `src/media/fx_chain.py`, `fx_audio.py`, `fx_analysis.py` | FX render chain (ffmpeg → deno → ffmpeg), audio mix, face/matte |
+| `src/fx_runtime/` | deno compositor (`main.ts`) + committed `fx-core.js` bundle (`pnpm run build:fx-core`) |
+| `src/editor_fx_render.py`, `src/services/fx_clip_jobs.py` | Studio FX export; FX re-render / clip-edit jobs (`fx_clip_job`) |
+| `src/api/routes/fx.py` | `/fx/assets` manifest + content-addressed files |
 | `src/caption_templates.py` | Caption template system |
 | `src/config.py` | Environment variable configuration |
 | `src/social/` | Social publishing providers (YouTube, TikTok, Instagram): OAuth, upload, metrics |
@@ -180,7 +186,7 @@ PostgreSQL 15. Schema in `init.sql`. Mixed naming conventions:
 ## API Endpoints (routes in `api/routes/`)
 
 **Task lifecycle:**
-- `POST /tasks/` — Create task, enqueue to worker (returns task_id); optional `workflow`, `workflow_options`, `instructions`
+- `POST /tasks/` — Create task, enqueue to worker (returns task_id); optional `workflow`, `workflow_options`, `instructions`, `source.start_seconds`/`source.end_seconds` (clip one part of a video over the plan's per-video limit; `source_range.py`)
 - `GET /tasks/workflows` — What the user can make on this platform (workflows flag, env gate, limits)
 - `GET /feature-flags` — Feature flags evaluated for the caller and platform
 - `GET /tasks/` — List user tasks
@@ -241,6 +247,9 @@ RevenueCat `...scale.monthly/annual` product IDs); only the display name changed
   600/1500). `tasks.source_duration_seconds` is recorded at task creation (YouTube
   preflight, ffprobe for uploads) and `BillingService` sums started minutes.
   Yearly subscriptions still reset monthly (`_usage_window`).
+- **Per-video length:** Pro 120 min, Creator/Team 180 min, for every source (YouTube, Twitch,
+  Kick, uploads) via `max_youtube_video_duration_for_plan` (`PRO_/SCALE_/TEAM_YOUTUBE_MAX_VIDEO_DURATION`;
+  the names predate uploads following them). No active plan or self-hosting: `MAX_VIDEO_DURATION` (90 min).
 - **Resolution:** Pro gets 720p via a final `cap_video_short_side` pass on generated
   clips and editor renders; Creator gets 1080p. Pro subscribers from before the
   change have `users.legacy_hd` (backfilled once) and keep 1080p until they cancel.
@@ -281,6 +290,15 @@ table (one per user, `slug` cleared on decline).
   (20% off for 3 months), added by hand in App Store Connect; admins then mark
   "App Store code added" and the creator page shows `appStoreRedeemUrl(code)`.
   The app's paywall opens Apple's redeem sheet ("Have a creator code?").
+- **Commission:** only for creators living in a Stripe payout country (US, UK, CA, CH, EEA; asked on the
+  application, `affiliates.country`, `ZZ` = elsewhere: they keep free Pro and their code). 30% of what a referred customer pays on the web (after discount, without tax) for
+  their first 12 months, held 30 days (`lib/creator-commission.ts`). Checkout stores `creator_code` on
+  the subscription; `invoice.paid` writes `affiliate_commissions` rows, `charge.refunded` and disputes
+  write negative ones, all idempotent by Stripe ID (`server/affiliate-commissions.ts`). Creators connect
+  a Stripe Connect Express account on the US account (the checkout account) from their creator page,
+  commission is kept in USD and one 12-month window per customer; admins pay everyone once a month from
+  `/admin` (`server/affiliate-payouts.ts`, one Transfer per creator, payout ID as idempotency key and
+  transfer group). Setup and operations: `docs/creator-program.md`.
 
 ## Pull requests
 
@@ -339,6 +357,18 @@ QUEUED_TASK_TIMEOUT_SECONDS=180      # Fail-safe for stuck tasks
 UPLOAD_COPY_WAIT_SECONDS=1800        # Worker on another machine: wait for an upload to reach the bucket
 AI_EDIT_DAILY_LIMIT=150              # Studio AI edits per user per day (needs ANTHROPIC_API_KEY)
 TEMP_DIR=/tmp                        # Uploads, caches, renders; per machine when MEDIA_STORAGE=s3
+EDIT_PLAN_LLM=                       # Dynamic edits beat tagging model (default: LLM)
+EDIT_PLAN_TIMEOUT_SECONDS=45         # Past it: heuristic beats
+EDIT_PLAN_DAILY_LIMIT=100            # Studio "Plan edits" per user per day
+FX_RUNTIME=deno                      # off = kill switch (FX renders at level safe, no drawing)
+FX_DENO_BIN=deno
+FX_WARP=on                           # off = no speed ramps / freezes
+FX_RENDER_TIMEOUT_SECONDS=           # Default max(900, 6 x clip seconds)
+FX_LIBRARY_DIR=/app/fx_library       # Drop-in sfx/ and music/; same on every render machine
+FX_LOUDNORM=static                   # static | dynamic
+FX_CHAIN_MODE=pipe                   # pipe | file
+REACTIONS_PROVIDER=off               # off | giphy (hosted: off until legal review)
+GIPHY_API_KEY=
 DATABASE_URL=postgresql+asyncpg://...
 BETTER_AUTH_SECRET=...               # Frontend auth secret
 ```
@@ -361,6 +391,11 @@ switch a feature per platform without a deploy, in the `/admin` "Feature Flags" 
   access (unaudited, TikTok rejects posts from public accounts). Off, `/social/providers` reports TikTok `configured: false,
   paused: true` (the web shows a short notice; iOS hides it) and connect/options/publish/retry return 503. Self-hosters
   with their own audited TikTok app turn it on in /admin.
+- **`instagram_publishing`:** seeded off on web and iOS (admins bypass) until Meta App Review approves Instagram Reels
+  publishing. Off, `/social/providers` reports Instagram `configured: false` (Coming soon on web; hidden on iOS) and
+  connect/options/publish/retry return 503 for non-admins, while admins can connect and publish test Reels.
+- **`dynamic_edits`:** seeded off on web and iOS (admins bypass). Off, requests that turn effects on (active
+  `edit_style` or an FX caption template) get 403 `DYNAMIC_EDITS_NOT_AVAILABLE` before any charge; stored FX clips keep working.
 - Adding a flag: seed it in a migration (and `init.sql`), add its default to `DEFAULT_FLAGS`, check it with
   `feature_flags.is_enabled(db, key, platform=client_platform(request), user_id=...)`.
 
@@ -393,6 +428,14 @@ Personalized analyses skip the shared `processing_cache` analysis entry.
   Instagram only app testers until Meta review, and YouTube uploads from an unaudited project stay
   private. Provider app IDs and setup notes are in `docs/configuration.md`.
 
+### Account email change
+
+Settings → Account changes the sign-in email after two codes (current address, then new address):
+`frontend/src/server/email-change.ts` (codes, limits per user/IP/target address, atomic switch + other-session
+sign-out + `email_change_log`),
+`email-change-billing.ts` (every Stripe customer, rolled back on failure), route `/api/account/email-change`,
+emails via backend `POST /account/email-change-email`. Design and limits: `docs/email-change.md`.
+
 ### Clip studio (editor)
 
 Full-screen, classic NLE layout at `/tasks/{id}/edit` (`frontend/src/components/editor/`): clip picker in the header, viewer and
@@ -408,8 +451,9 @@ the cancel request. Editor media goes to `media/editor/<session>/` in the bucket
 
 **Preparation never shortens a clip:** each job assembles its YouTube timeline in its own `youtube-work/` directory and
 reads another job's file only through a hard-linked copy. Source ranges map with `local_ranges_for(..., strict=True)`, and
-a `clean.mp4` shorter than the clip's ranges fails with `SOURCE_INCOMPLETE`. Generation saves its 9:16 plan in the source map
-(`vertical_layout`), which the editor replays into `layout.mp4` so the studio opens on the clip's own framing.
+a `clean.mp4` shorter than the clip's ranges fails with `SOURCE_INCOMPLETE`. The batch render path (`create_clips_from_segments`)
+and every FX render save the 9:16 plan in the source map (`vertical_layout`); the editor replays it into `layout.mp4` so the
+studio opens on the clip's own framing. Legacy clips from `VideoService.create_single_clip` have none and are re-detected.
 `POST .../editor/rebuild` prepares a session again with a fresh draft; the replaced draft stays in `draft_backup`
 (`GET .../editor/backup`). The browser keeps a bounded copy per clip (`lib/editor/draft-cache.ts`): unsaved edits always,
 undo history only for the last few saved clips.
@@ -443,6 +487,28 @@ story, adjacent parts share one exact cut), `topic` (every strong moment about `
   `hero-clip-view.tsx` and `workflow-failure.tsx`. MCP: `workflow`/`topic`/`part_count`/`instructions` on
   `supoclip_create_clip_task`, plus `supoclip_list_workflows`.
 
+### Dynamic edits
+
+Optional effects on any workflow; full guide `docs/dynamic-edits.md`. `tasks.edit_style`
+(`EditStyle`, intensity `off|subtle|bold|max` + toggles) and/or an FX caption template (10 ids in
+`FX_CAPTION_TEMPLATES_DICT`, each with an `ass_fallback`; only `LISTED_FX_CAPTION_TEMPLATES` = highlighter_swipe,
+emoji_drop, behind_head are offered, the other 7 are `hidden` and render for stored tasks only) turn it on;
+`generated_clips.fx_meta` marks FX clips. Listed styles draw the intensity's caption look (`caption_style.LOOKS`).
+
+- **Pipeline:** LLM beats by word id (`edit_fx/beats_llm.py`, heuristic fallback) → pure seeded `resolve` → `FxPlan` cues
+  (S time; E after cuts, F after warp) → one TS renderer `frontend/src/lib/fx/core` (browser) and the same bundle under deno +
+  `@napi-rs/canvas` (worker) → ffmpeg P1 → deno P2 → ffmpeg P3 (audio, ASS, encode) → 720p cap last.
+- **Invariant:** intensity off + classic template is byte-identical (prompts, cache keys, job args, renders); pinned by
+  `test_dynamic_edits_legacy_pins.py`. Beats never enter `processing_cache` keys; drop-in assets never change the plan.
+- **Fallback ladder** full → safe (no deno) → none (classic); `fx_level` on the clip; PostHog `fx_render`,
+  `fx_render_failed`, `edit_beats_fallback`.
+- **Jobs:** FX settings re-render and trim/split/merge/caption edits return 202 and run `fx_clip_job` (poll
+  `GET /tasks/{id}/clip-jobs/{job}`); studio `edit_fx_plan_job` (AI worker), `editor_fx_analysis` (video worker).
+- **Change fx-core** → `cd frontend && pnpm run build:fx-core` and commit `backend/src/fx_runtime/fx-core.js` (CI checks drift);
+  `deno task test` in `backend/src/fx_runtime`. deno is pinned at 2.9.8 with the npm cache baked into the image.
+- **UI:** create screen Edits tab (`components/edit-intensity.tsx`) + animated tiles (`caption-style-tiles.tsx`), task-page
+  intensity, studio Edits tab + FX lane; MCP `intensity`/`edit_style`, `supoclip_list_edit_styles`.
+
 ### Modifying AI clip selection
 
 Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria, `TranscriptSegment` defines the output model, `get_most_relevant_parts_by_transcript()` runs analysis with validation.
@@ -457,7 +523,8 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
 
 ## Observability
 
-Errors and analytics go to PostHog (project "SupoClip", EU, id `314504`); logs go to
+Errors and analytics go to self-hosted PostHog (`https://ph.supoclip.com`, project "SupoClip", id `1`;
+history before 2026-11-24 is in EU cloud project `314504`); logs go to
 Axiom (dataset `supoclip-prod`). Everything is off unless tokens are set. Details in
 `docs/observability.md`.
 

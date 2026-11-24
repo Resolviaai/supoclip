@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -221,6 +222,27 @@ async def test_unreadable_or_long_upload_uses_no_minutes(monkeypatch, creation, 
 
 
 @pytest.mark.asyncio
+async def test_upload_that_is_too_slow_to_read_is_not_called_unplayable(monkeypatch, creation):
+    request, service, queue, _billing = creation
+    request.json.return_value = {"source": {"url": "upload://video.mp4"}}
+
+    def probe(*_args):
+        raise subprocess.TimeoutExpired(["ffprobe"], 40)
+
+    monkeypatch.setattr(tasks.VideoService, "probe_upload_duration", staticmethod(probe))
+    with pytest.raises(HTTPException) as error:
+        await tasks.create_task(request, db=None)
+    assert error.value.status_code == 422
+    assert error.value.detail["code"] == "VIDEO_PROBE_TIMEOUT"
+    message = error.value.detail["message"]
+    assert "took too long" in message
+    assert "playable" not in message
+    assert "No minutes were used" in message
+    service.create_task_with_source.assert_not_awaited()
+    queue.enqueue_processing_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("preset", ["auto", "short", "medium", "long"])
 async def test_clip_length_is_persisted_and_queued(monkeypatch, creation, preset):
     request, _, queue, _ = creation
@@ -245,3 +267,37 @@ async def test_invalid_clip_length_rejected_before_billing_or_download(monkeypat
     service.create_task_with_source.assert_not_awaited()
     queue.enqueue_processing_job.assert_not_awaited()
     preflight.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_self_host_accepts_long_youtube_stream_and_upload_videos(monkeypatch, creation):
+    request, service, queue, billing = creation
+    billing["max_youtube_duration_seconds"] = None
+    billing["max_upload_duration_seconds"] = None
+    six_hours = 6 * 3600
+
+    monkeypatch.setattr(
+        tasks,
+        "async_get_youtube_video_info",
+        AsyncMock(return_value={"duration": six_hours, "title": "Long YouTube"}),
+    )
+    yt_result = await tasks.create_task(request, db=None)
+    assert yt_result["task_id"] == "task-1"
+    assert service.create_task_with_source.await_args.kwargs["source_duration_seconds"] == six_hours
+
+    request.json.return_value = {"source": {"url": "https://www.twitch.tv/videos/123456"}}
+    monkeypatch.setattr(
+        tasks,
+        "fetch_stream_info",
+        lambda *_args, **_kwargs: {"duration": six_hours, "title": "Long VOD"},
+    )
+    stream_result = await tasks.create_task(request, db=None)
+    assert stream_result["task_id"] == "task-1"
+    assert service.create_task_with_source.await_args.kwargs["source_duration_seconds"] == six_hours
+
+    request.json.return_value = {"source": {"url": "upload://long-recording.mp4"}}
+    monkeypatch.setattr(tasks.VideoService, "probe_upload_duration", MagicMock(return_value=float(six_hours)))
+    upload_result = await tasks.create_task(request, db=None)
+    assert upload_result["task_id"] == "task-1"
+    assert service.create_task_with_source.await_args.kwargs["source_duration_seconds"] == six_hours
+    assert queue.enqueue_processing_job.await_count == 3

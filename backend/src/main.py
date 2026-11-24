@@ -86,6 +86,8 @@ def create_app(
                 # The message may quote configuration; log only the class name.
                 logger.error("Could not set up the Hermes feedback webhook (%s)", type(exc).__name__)
 
+            if hasattr(queue_adapter, "serving_requests"):
+                queue_adapter.serving_requests = True
             pool = await queue_adapter.get_pool()
             logger.info("✅ Job queue initialized")
             try:
@@ -122,6 +124,7 @@ def create_app(
             "Content-Type",
             "Authorization",
             "x-supoclip-user-id",
+            "x-supoclip-team-id",
             "x-supoclip-ts",
             "x-supoclip-signature",
             "x-trace-id",
@@ -226,7 +229,9 @@ def create_app(
     from .api.routes.social import router as social_router
     from .api.routes.email_preferences import router as email_preferences_router
     from .api.routes.feature_flags import router as feature_flags_router
+    from .api.routes.fx import router as fx_router
     from .api.routes.stripe_cancellations import router as stripe_cancellations_router
+    from .api.routes.teams import router as teams_router
     from .api.routes.mcp_oauth import consent_router as mcp_oauth_consent_router
     from .api.routes.mcp_oauth import internal_router as mcp_oauth_internal_router
 
@@ -239,7 +244,9 @@ def create_app(
     app.include_router(social_router)
     app.include_router(email_preferences_router)
     app.include_router(feature_flags_router)
+    app.include_router(fx_router)
     app.include_router(stripe_cancellations_router)
+    app.include_router(teams_router)
     app.include_router(mcp_oauth_internal_router)
     app.include_router(mcp_oauth_consent_router)
 

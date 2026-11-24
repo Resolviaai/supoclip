@@ -17,8 +17,8 @@
       "featureCrop": "Crop vertikal 9:16 yang mengikuti wajah",
       "featureCaptions": "Caption animasi yang sinkron per kata",
       "featureExports": "Ekspor YouTube Shorts, TikTok, dan Instagram Reels",
-      "featureSelfHost": "Hosting mandiri untuk penggunaan nonkomersial",
-      "offerCategory": "Kode sumber untuk hosting mandiri nonkomersial",
+      "featureSelfHost": "Hosting mandiri gratis untuk penggunaan nonkomersial dan kreator perorangan",
+      "offerCategory": "Kode sumber untuk hosting mandiri nonkomersial dan kreator perorangan",
       "ios": "Aplikasi iOS SupoClip: ubah video panjang jadi short vertikal ber-caption dari iPhone.",
       "website": "AI video clipping open source untuk konten pendek."
     }
@@ -36,7 +36,7 @@
   },
   "footer": {
     "tagline": "AI video clipper open source. Pakai aplikasi yang di-host atau jalankan di infrastrukturmu sendiri.",
-    "licenseNotice": "Penggunaan komersial, termasuk untuk keperluan internal perusahaan, memerlukan <license>izin tertulis</license>.",
+    "licenseNotice": "Kreator perorangan boleh host sendiri dan memonetisasi secara gratis. Perusahaan, agensi, dan hosting berbayar memerlukan <license>izin tertulis</license>.",
     "github": "GitHub",
     "ios": "Aplikasi iOS",
     "discord": "Komunitas Discord",
@@ -46,7 +46,7 @@
       "product": "Produk"
     },
     "columnLinks": "Tautan {heading}",
-    "operator": "Produk dari {company}."
+    "operator": "SupoClip dioperasikan oleh {company}."
   },
   "creator": {
     "codeLead": "Kode",
@@ -97,6 +97,18 @@
       "title": "Host sendiri SupoClip dengan Docker Compose",
       "description": "Kebutuhan, variabel environment, boot pertama, penyiapan yang sepenuhnya lokal, dan pemeriksaan produksi."
     },
+    "blog_supoclip_vs_opusclip_klap_vizard": {
+      "eyebrow": "Comparison",
+      "title": "SupoClip vs OpusClip vs Klap vs Vizard",
+      "label": "SupoClip vs OpusClip, Klap, Vizard",
+      "description": "Free plans, price per hour or clip, exports and publishing across four AI clippers."
+    },
+    "blog_free_opusclip_alternatives": {
+      "eyebrow": "Comparison",
+      "title": "Best free OpusClip alternatives",
+      "label": "Free OpusClip alternatives",
+      "description": "What the free tiers of hosted clippers include, and open-source tools with no watermark."
+    },
     "blog_supoclip_vs_opusclip": {
       "label": "SupoClip vs OpusClip",
       "eyebrow": "Perbandingan",
@@ -140,28 +152,28 @@
       "label": "Catatan perubahan"
     },
     "blog_podcast_to_shorts": {
-      "eyebrow": "Podcast clips",
-      "title": "Turn a video podcast into Shorts and Reels",
-      "label": "Podcast to Shorts",
-      "description": "Choose complete ideas, correct captions, and follow real clips back to the source."
+      "eyebrow": "Klip podcast",
+      "title": "Ubah video podcast menjadi Shorts dan Reels",
+      "label": "Podcast ke Shorts",
+      "description": "Pilih gagasan yang utuh, perbaiki subtitle, dan bandingkan klip nyata dengan rekaman aslinya."
     },
     "blog_find_best_moments_in_video": {
-      "eyebrow": "Highlight selection",
-      "title": "Find the best moments in a long video",
-      "label": "Find video highlights",
-      "description": "Use a practical checklist for hooks, context, payoff, and clean boundaries."
+      "eyebrow": "Pilihan highlight",
+      "title": "Temukan momen terbaik di video panjang",
+      "label": "Temukan highlight video",
+      "description": "Gunakan daftar cek praktis untuk hook, konteks, klimaks, dan batas potong yang rapi."
     },
     "blog_twitch_vod_to_shorts": {
-      "eyebrow": "Stream clips",
-      "title": "Turn Twitch VODs into TikTok clips and Shorts",
-      "label": "Twitch VOD to Shorts",
-      "description": "Review spoken highlights, preserve gameplay context, and export vertical clips."
+      "eyebrow": "Klip stream",
+      "title": "Ubah VOD Twitch jadi klip TikTok dan Shorts",
+      "label": "VOD Twitch ke Shorts",
+      "description": "Tinjau highlight lisan, jaga konteks gameplay, dan ekspor klip vertikal."
     },
     "blog_how_to_clip_gta_6": {
       "eyebrow": "Clipping GTA 6",
       "title": "Cara membuat klip GTA 6",
       "label": "Klip GTA 6",
-      "description": "Bayaran kampanye clipping, aturan Rockstar, dan alur kerja dari VOD ke klip vertikal."
+      "description": "Bayaran kampanye clipping, aturan Rockstar Games, dan alur kerja dari VOD ke klip vertikal."
     },
     "blog_repurpose_webinar_clips": {
       "eyebrow": "Webinar repurposing",
@@ -170,10 +182,10 @@
       "description": "Turn audience questions and useful answers into clips with readable slides and captions."
     },
     "blog_word_by_word_video_captions": {
-      "eyebrow": "Caption editing",
-      "title": "Add readable word-by-word captions to clips",
-      "label": "Word-by-word captions",
-      "description": "Correct the transcript, choose a style, and keep subtitles clear of platform controls."
+      "eyebrow": "Edit subtitle",
+      "title": "Tambahkan subtitle kata per kata yang rapi ke klip",
+      "label": "Subtitle kata per kata",
+      "description": "Perbaiki transkrip, pilih gaya, dan jaga subtitle tetap bersih dari tombol platform."
     },
     "blog_schedule_week_of_youtube_shorts": {
       "eyebrow": "Publishing workflow",
@@ -189,6 +201,9 @@
     },
     "faq": {
       "label": "FAQ"
+    },
+    "examples": {
+      "label": "Contoh klip"
     }
   },
   "nav": {
@@ -205,7 +220,8 @@
     "openHosted": "Buka aplikasi yang di-host",
     "toggleMenu": "Buka atau tutup menu",
     "publishing": "Publikasi",
-    "faq": "FAQ"
+    "faq": "FAQ",
+    "examples": "Contoh"
   },
   "hero": {
     "badge": "Open source dan bisa di-host sendiri. Juga tersedia di iPhone.",
@@ -316,6 +332,61 @@
         "description": "Ekspor sekali klik untuk Shorts, TikTok, dan Reels, dengan B-roll stok saat klip membutuhkannya."
       }
     }
+  },
+  "dynamicEdits": {
+    "eyebrow": "Edit dinamis",
+    "title": "Klip yang terlihat seperti diedit profesional",
+    "body": "Pilih intensitas edit. AI menemukan momen yang penting lalu menghidupkannya dengan subtitle, punch-in, efek suara, dan musik. Satu klip, empat gaya: ganti saat sedang diputar.",
+    "switcherLabel": "Intensitas edit",
+    "intensity": {
+      "off": {
+        "label": "Mati",
+        "description": "Potongan bersih dan subtitle seperti biasa, tanpa tambahan apa pun."
+      },
+      "subtle": {
+        "label": "Halus",
+        "description": "Nuansa klip podcast: sesekali bingkai berganti, dengan musik pelan di bawahnya."
+      },
+      "bold": {
+        "label": "Tegas",
+        "description": "Punch-in ala Hormozi yang bertahan, subtitle kata demi kata dengan kata kunci dalam kotak, dan sesekali hentakan di potongan."
+      },
+      "max": {
+        "label": "Maksimal",
+        "description": "Subtitle tebal ala MrBeast, lebih banyak reframe dan zoom, kilatan di potongan, efek suara, dan musik latar."
+      }
+    },
+    "player": {
+      "label": "Klip dengan intensitas {intensity}",
+      "play": "Putar",
+      "pause": "Jeda",
+      "mute": "Bisukan",
+      "unmute": "Nyalakan suara",
+      "tapForSound": "Ketuk untuk suara"
+    },
+    "broll": {
+      "title": "Maksimal, dengan b-roll",
+      "caption": "Cuplikan sisipan dari episode itu sendiri memenuhi bingkai vertikal, bukan menyusut jadi strip, dengan teks, hentakan, dan musik tetap berjalan di atasnya."
+    },
+    "points": {
+      "captions": {
+        "title": "Subtitle yang muncul kata demi kata",
+        "description": "Gaya animasi menaruh kata kunci dalam kotak, menjatuhkan emoji, atau menyelipkan kata di belakang kepala pembicara. Kata kasar disensor dengan bunyi bip dan ditampilkan sebagai f***."
+      },
+      "motion": {
+        "title": "Punch-in dan reframe sesuai ketukan",
+        "description": "AI memilih kalimat yang penting, lalu gambar memperbesar, memotong lebih dekat, atau berkilat tepat di sana."
+      },
+      "sound": {
+        "title": "Suara dan musik di bawah suara pembicara",
+        "description": "Hentakan di setiap potongan dan musik latar sesuai suasana klip, dari santai sampai agresif, dicampur di bawah setiap kata."
+      },
+      "studio": {
+        "title": "Semuanya tetap bisa diedit",
+        "description": "Ubah intensitas klip yang sudah ada, atau sesuaikan satu efek di studio klip."
+      }
+    },
+    "source": "Kedua klip dibuat oleh SupoClip dari <link>{title}</link>."
   },
   "editor": {
     "eyebrow": "Editor",
@@ -440,7 +511,28 @@
     },
     "publishPlatforms": "Publikasikan klip ke YouTube Shorts dan TikTok",
     "schedulingPlatforms": "Jadwalkan klip ke YouTube Shorts dan TikTok",
-    "schedulingSoon": "Penjadwalan ke Instagram"
+    "schedulingSoon": "Penjadwalan ke Instagram",
+    "team": {
+      "badge": "Tim & Agensi",
+      "description": "Untuk kru klip, agensi, dan kreator yang bekerja bersama editor.",
+      "seatAddon": "Termasuk {seats} kursi · +${price}/kursi ekstra (+{hours} jam)",
+      "seatsLabel": "{count} kursi",
+      "decreaseSeats": "Kurangi kursi",
+      "increaseSeats": "Tambah kursi",
+      "cta": "Mulai Tim",
+      "features": {
+        "pooledHours": "{hours} jam video bersama/bulan",
+        "seats": "{seats} kursi dengan perpustakaan klip bersama",
+        "quality": "Klip Full HD {resolution} · video hingga {hours} jam",
+        "sharedWorkspace": "Penjadwalan sosial & {aiEdits} edit AI bersama/bln",
+        "roles": "Peran Pemilik, Admin & Anggota + konkurensi lebih tinggi",
+        "aiEdits": "{aiEdits} edit AI bersama/bln"
+      }
+    },
+    "limits": {
+      "monthly": "Video per bulan",
+      "perVideo": "Durasi maks. per video"
+    }
   },
   "faq": {
     "eyebrow": "FAQ",
@@ -457,7 +549,7 @@
       },
       "minutes": {
         "question": "Bagaimana menit dihitung?",
-        "answer": "Paket dihitung dalam menit video sumber, bukan jumlah klip. Pro mencakup {proHours} jam per bulan dan Creator {creatorHours} jam. Video 30 menit memakai 30 menit, berapa pun klip yang dihasilkan. Kuota diatur ulang setiap bulan, termasuk pada paket tahunan."
+        "answer": "Paket dihitung dalam menit video sumber, bukan jumlah klip. Pro mencakup {proHours} jam per bulan dan Creator {creatorHours} jam. Video 30 menit memakai 30 menit, berapa pun klip yang dihasilkan. Kuota diatur ulang setiap bulan, termasuk pada paket tahunan. Setiap video bisa sampai {proMinutes} menit di Pro dan {creatorMinutes} menit di Creator."
       },
       "publishing": {
         "question": "Bisakah SupoClip memposting ke TikTok dan Instagram?",
@@ -473,7 +565,7 @@
       },
       "selfHost": {
         "question": "Benarkah host sendiri itu gratis?",
-        "answer": "SupoClip mengizinkan hosting mandiri dan fork untuk tujuan nonkomersial. Penggunaan komersial memerlukan izin tertulis terlebih dahulu dari Shiori LLC."
+        "answer": "SupoClip mengizinkan hosting mandiri dan fork untuk tujuan nonkomersial, dan kreator perorangan boleh meng-host-nya sendiri untuk membuat clip bagi kanal monetisasi milik mereka sendiri. Perusahaan, agensi, pekerjaan untuk klien, dan hosting berbayar memerlukan izin tertulis terlebih dahulu dari Shiori LLC."
       },
       "cancel": {
         "question": "Bisakah saya berhenti berlangganan kapan saja?",
@@ -484,11 +576,11 @@
   "openSource": {
     "badge": "Lisensi Kode Sumber Nonkomersial SupoClip",
     "title": "Dibangun secara terbuka",
-    "body": "Kode sumber untuk hosting mandiri nonkomersial",
+    "body": "Kode sumber untuk hosting mandiri nonkomersial dan kreator perorangan",
     "commandLabel": "host sendiri",
     "comment": "# tambahkan penyedia transkripsi + LLM ke .env",
     "facts": {
-      "license": "SupoClip mengizinkan hosting mandiri dan fork untuk tujuan nonkomersial. Penggunaan komersial memerlukan izin tertulis terlebih dahulu dari Shiori LLC.",
+      "license": "SupoClip mengizinkan hosting mandiri dan fork untuk tujuan nonkomersial, dan kreator perorangan boleh meng-host-nya sendiri untuk membuat clip bagi kanal monetisasi milik mereka sendiri. Perusahaan, agensi, pekerjaan untuk klien, dan hosting berbayar memerlukan izin tertulis terlebih dahulu dari Shiori LLC.",
       "docker": "Satu perintah Docker Compose untuk menjalankannya sendiri",
       "models": "Pakai model pilihanmu: Gemini, OpenAI, Anthropic, atau Ollama"
     },

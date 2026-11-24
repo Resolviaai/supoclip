@@ -184,7 +184,7 @@
       },
       "1": {
         "question": "Ist SupoClip kostenlos selbst zu hosten?",
-        "answer": "SupoClip erlaubt Self-Hosting und Forks für nichtkommerzielle Zwecke. Kommerzielle Nutzung erfordert die vorherige schriftliche Genehmigung von Shiori LLC. Der Betrieb braucht trotzdem Hardware oder Hosting, Speicher, Transkription und mögliche bezahlte LLM-Nutzung. Gehostetes SupoClip hat eigene Nutzungsbedingungen und Preise."
+        "answer": "SupoClip erlaubt Self-Hosting und Forks für nichtkommerzielle Zwecke, und einzelne Creator dürfen es selbst hosten, um Clips für ihre eigenen monetarisierten Kanäle zu erstellen. Unternehmen, Agenturen, Kundenaufträge und bezahltes Hosting erfordern die vorherige schriftliche Genehmigung von Shiori LLC. Der Betrieb braucht trotzdem Hardware oder Hosting, Speicher, Transkription und mögliche bezahlte LLM-Nutzung. Gehostetes SupoClip hat eigene Nutzungsbedingungen und Preise."
       },
       "2": {
         "question": "Kann SupoClip Live-Clipping und automatisches Posten ersetzen?",
@@ -330,7 +330,7 @@
     "faqs": {
       "0": {
         "question": "Ist selbst gehostetes SupoClip kostenlos?",
-        "answer": "SupoClip erlaubt Self-Hosting und Forks für nichtkommerzielle Zwecke. Kommerzielle Nutzung erfordert die vorherige schriftliche Genehmigung von Shiori LLC. Hardware oder Server und jede Cloud-Transkription oder LLM-Nutzung, die du einrichtest, zahlst du selbst. Whisper plus Ollama vermeidet KI-Gebühren pro Anfrage, braucht aber genug lokale Rechenleistung."
+        "answer": "SupoClip erlaubt Self-Hosting und Forks für nichtkommerzielle Zwecke, und einzelne Creator dürfen es selbst hosten, um Clips für ihre eigenen monetarisierten Kanäle zu erstellen. Unternehmen, Agenturen, Kundenaufträge und bezahltes Hosting erfordern die vorherige schriftliche Genehmigung von Shiori LLC. Hardware oder Server und jede Cloud-Transkription oder LLM-Nutzung, die du einrichtest, zahlst du selbst. Whisper plus Ollama vermeidet KI-Gebühren pro Anfrage, braucht aber genug lokale Rechenleistung."
       },
       "1": {
         "question": "Kann SupoClip ohne Cloud-KI-Dienste laufen?",
@@ -438,7 +438,7 @@
       "li5": "<strong>Ändere das Datenbankpasswort.</strong> <code>docker-compose.yml</code> schreibt <code>supoclip_password</code> an vier Stellen fest: <code>POSTGRES_PASSWORD</code> im Dienst <code>postgres</code> und <code>DATABASE_URL</code> in den Diensten <code>frontend</code>, <code>backend</code> und <code>worker</code>. Nur <code>POSTGRES_PASSWORD</code> in <code>.env</code> zu ändern trifft keine davon. Überschreib alle vier, wie unten gezeigt.",
       "li6": "<strong>Setze <code>REDIS_PASSWORD</code></strong>; der Redis-Container schaltet AUTH ein, wenn der Wert nicht leer ist.",
       "li7": "<strong>Schließ Registrierungen</strong> mit <code>DISABLE_SIGN_UP=true</code>, wenn die Instanz nur für dein Team ist.",
-      "li8": "<strong>Prüf die Limits:</strong> <code>MAX_VIDEO_DURATION</code> (Standard 5400 s, 90 Minuten) und <code>MAX_VIDEO_UPLOAD_BYTES</code> (Standard 4 GB).",
+      "li8": "<strong>Prüf das Upload-Limit:</strong> <code>MAX_VIDEO_UPLOAD_BYTES</code> (Standard 4 GB). Selbst gehostete Installationen haben kein Limit für die Videolänge.",
       "labelReset": "docker-compose.override.yml (Compose v2.24+)",
       "passwordIntro": "Für das Datenbankpasswort trag einen neuen Wert in <code>POSTGRES_PASSWORD</code> in <code>.env</code> ein. Erzeuge ihn mit <code>openssl rand -hex 24</code>, weil Hex in einer URL kein Escaping braucht. Zeig dann alle vier Einstellungen in derselben Override-Datei darauf:",
       "labelPassword": "docker-compose.override.yml (in ein Override mischen, das du schon hast)",

@@ -27,8 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..analytics import capture_event
 from ..config import Config, get_config
 from .. import feature_flags
-from ..feature_flags import PLATFORMS, TIKTOK_PUBLISHING, Platform
+from ..feature_flags import INSTAGRAM_PUBLISHING, PLATFORMS, TIKTOK_PUBLISHING, Platform
 from .billing_service import BillingService
+from .social_publish_email_service import (
+    SocialPublishEmailService,
+    SocialPublishRecipient,
+)
 from ..media_storage import STORAGE_ERRORS, MediaStorage, is_s3, media_work
 from ..repositories.clip_repository import ClipRepository
 from ..repositories.social_repository import SocialRepository, TERMINAL_POST_STATUSES
@@ -52,6 +56,13 @@ TIKTOK_PAUSED_MESSAGE = (
     "TikTok publishing is paused while we fix an issue with TikTok. "
     "Your other platforms work as usual."
 )
+INSTAGRAM_UNAVAILABLE_MESSAGE = (
+    "Instagram Reels publishing is not available on your account yet."
+)
+_PROVIDER_FLAG_GATES: dict[str, tuple[str, str]] = {
+    "tiktok": (TIKTOK_PUBLISHING, TIKTOK_PAUSED_MESSAGE),
+    "instagram": (INSTAGRAM_PUBLISHING, INSTAGRAM_UNAVAILABLE_MESSAGE),
+}
 
 PUBLISH_JOB_NAME = "publish_social_post"
 OAUTH_STATE_TTL_SECONDS = 600
@@ -144,7 +155,9 @@ class SocialService:
         email = (row.email or "").strip().lower()
         return bool(row.is_admin) or email in self.config.social_publishing_allowed_emails
 
-    async def can_schedule(self, user_id: str) -> bool:
+    async def can_schedule(
+        self, user_id: str, *, team_id: Optional[str] = None
+    ) -> bool:
         """Plan entitlement, plus admin testing during the restricted rollout."""
         if self.config.social_publishing_access == "admins":
             row = (
@@ -155,30 +168,42 @@ class SocialService:
             ).fetchone()
             if row and row.is_admin:
                 return True
-        summary = await BillingService(self.db, self.config).get_usage_summary(user_id)
+        summary = await BillingService(self.db, self.config).get_usage_summary(
+            user_id, **_team_kw(team_id)
+        )
         return bool(summary.get("can_schedule_posts"))
+
+    async def provider_flag_enabled(self, name: str, user_id: Optional[str]) -> bool:
+        """Whether a provider's feature flag (if any) allows this caller on this platform."""
+        gate = _PROVIDER_FLAG_GATES.get((name or "").strip().lower())
+        if gate is None:
+            return True
+        flag_key, _ = gate
+        return await feature_flags.is_enabled(
+            self.db, flag_key, platform=self.platform, user_id=user_id
+        )
 
     async def provider_paused(self, name: str, user_id: Optional[str]) -> bool:
         """TikTok is paused by the ``tiktok_publishing`` feature flag (switched in /admin)."""
         if (name or "").strip().lower() != "tiktok":
             return False
-        return not await feature_flags.is_enabled(
-            self.db, TIKTOK_PUBLISHING, platform=self.platform, user_id=user_id
-        )
+        return not await self.provider_flag_enabled("tiktok", user_id)
 
     async def _ensure_not_paused(
         self, name: str, user_id: Optional[str], *, any_platform: bool = False
     ) -> None:
-        """Refuse a paused platform. The worker has no platform, so either one being on lets it publish."""
-        if (name or "").strip().lower() != "tiktok":
+        """Refuse a disabled/paused platform. The worker has no platform, so either one being on lets it publish."""
+        gate = _PROVIDER_FLAG_GATES.get((name or "").strip().lower())
+        if gate is None:
             return
+        flag_key, message = gate
         platforms = PLATFORMS if any_platform else (self.platform,)
         for platform in platforms:
             if await feature_flags.is_enabled(
-                self.db, TIKTOK_PUBLISHING, platform=platform, user_id=user_id
+                self.db, flag_key, platform=platform, user_id=user_id
             ):
                 return
-        raise SocialProviderUnavailable(TIKTOK_PAUSED_MESSAGE)
+        raise SocialProviderUnavailable(message)
 
     def _provider(self, name: str) -> SocialProvider:
         normalized = (name or "").strip().lower()
@@ -203,13 +228,26 @@ class SocialService:
     def redirect_uri_for(self, provider_name: str) -> str:
         return f"{self.config.social_oauth_redirect_base_url}/api/social/callback/{provider_name}"
 
-    async def list_connections(self, user_id: str) -> List[Dict[str, Any]]:
-        return await self.repo.list_accounts(self.db, user_id)
+    async def list_connections(
+        self, user_id: str, *, team_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        return await self.repo.list_accounts(self.db, user_id, **_team_kw(team_id))
 
-    async def publishing_options(self, user_id: str, account_id: str) -> Dict[str, Any]:
+    async def publishing_options(
+        self, user_id: str, account_id: str, *, team_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Current account-specific choices; never expose credentials to the client."""
         account = await self.repo.get_account_with_tokens(self.db, account_id)
-        if not account or account.get("user_id") != user_id or account.get("revoked_at"):
+        belongs = (
+            account is not None
+            and not account.get("revoked_at")
+            and (
+                account.get("team_id") == team_id
+                if team_id
+                else account.get("team_id") is None and account.get("user_id") == user_id
+            )
+        )
+        if not belongs:
             raise SocialNotFound("Connected account not found")
         if account.get("status") == "reauth_required":
             raise SocialValidationError("Reconnect this account before publishing.")
@@ -241,7 +279,12 @@ class SocialService:
         }
 
     async def start_connection(
-        self, user_id: str, provider_name: str, *, client: Optional[str] = None
+        self,
+        user_id: str,
+        provider_name: str,
+        *,
+        client: Optional[str] = None,
+        team_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         provider = self._provider(provider_name)
         await self._ensure_not_paused(provider_name, user_id)
@@ -263,6 +306,7 @@ class SocialService:
             code_verifier=code_verifier,
             redirect_uri=redirect_uri,
             ttl_seconds=OAUTH_STATE_TTL_SECONDS,
+            **_team_kw(team_id),
         )
         authorize_url = provider.build_authorize_url(
             state=state, redirect_uri=redirect_uri, code_challenge=code_challenge
@@ -270,7 +314,13 @@ class SocialService:
         return {"provider": provider.name, "authorize_url": authorize_url, "state": state}
 
     async def complete_connection(
-        self, user_id: str, provider_name: str, *, code: str, state: str
+        self,
+        user_id: str,
+        provider_name: str,
+        *,
+        code: str,
+        state: str,
+        team_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         provider = self._provider(provider_name)
         await self._ensure_not_paused(provider_name, user_id)
@@ -281,6 +331,7 @@ class SocialService:
             not state_row
             or state_row["user_id"] != user_id
             or state_row["provider"] != provider.name
+            or state_row.get("team_id") != team_id
         ):
             raise SocialValidationError(
                 "This sign-in link has expired or does not belong to you. Try connecting again."
@@ -311,18 +362,32 @@ class SocialService:
             token_expires_at=tokens.expires_at,
             scopes=tokens.scopes,
             metadata=profile.metadata,
+            **_team_kw(state_row.get("team_id")),
         )
         logger.info(
-            "Connected %s account %s for user %s", provider.name, account["id"], user_id
+            "Connected %s account %s for user %s (team=%s)",
+            provider.name,
+            account["id"],
+            user_id,
+            state_row.get("team_id"),
         )
         return account
 
-    async def disconnect(self, user_id: str, account_id: str) -> bool:
+    async def disconnect(
+        self, user_id: str, account_id: str, *, team_id: Optional[str] = None
+    ) -> bool:
         account = await self.repo.get_account_with_tokens(self.db, account_id)
         # Clear local credentials first: disconnecting must work even when the
         # platform is unreachable.
-        removed = await self.repo.revoke_account(self.db, user_id, account_id)
-        if removed and account and account.get("user_id") == user_id:
+        removed = await self.repo.revoke_account(
+            self.db, user_id, account_id, **_team_kw(team_id)
+        )
+        owner_match = account and (
+            account.get("team_id") == team_id
+            if team_id
+            else account.get("team_id") is None and account.get("user_id") == user_id
+        )
+        if removed and owner_match:
             await self._revoke_at_provider(
                 account["provider"],
                 account["id"],
@@ -331,12 +396,14 @@ class SocialService:
             )
         return removed
 
-    async def disconnect_all(self, user_id: str) -> int:
-        """Disconnect every account of a user (account deletion)."""
-        accounts = await self.repo.list_accounts(self.db, user_id)
+    async def disconnect_all(
+        self, user_id: str, *, team_id: Optional[str] = None
+    ) -> int:
+        """Disconnect every account of a user or team."""
+        accounts = await self.repo.list_accounts(self.db, user_id, **_team_kw(team_id))
         removed = 0
         for account in accounts:
-            removed += int(await self.disconnect(user_id, account["id"]))
+            removed += int(await self.disconnect(user_id, account["id"], team_id=team_id))
         return removed
 
     async def _revoke_at_provider(
@@ -419,12 +486,26 @@ class SocialService:
     # Posts
     # ------------------------------------------------------------------
     async def generate_caption(
-        self, user_id: str, *, task_id: str, clip_id: str, provider: str
+        self,
+        user_id: str,
+        *,
+        task_id: str,
+        clip_id: str,
+        provider: str,
+        team_id: Optional[str] = None,
     ) -> Dict[str, str]:
         from .social_caption_service import generate_social_caption
 
         task = await self.task_repo.get_task_by_id(self.db, task_id)
-        if not task or task.get("user_id") != user_id:
+        task_allowed = (
+            task is not None
+            and (
+                task.get("team_id") == team_id
+                if team_id
+                else task.get("team_id") is None and task.get("user_id") == user_id
+            )
+        )
+        if not task_allowed:
             raise SocialNotFound("Task not found")
         clip = await self.clip_repo.get_clip_by_id(self.db, clip_id)
         if not clip or clip.get("task_id") != task_id:
@@ -460,9 +541,18 @@ class SocialService:
         hashtags: Optional[List[str]],
         privacy_level: Optional[str],
         scheduled_for: Optional[str],
+        team_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         task = await self.task_repo.get_task_by_id(self.db, task_id)
-        if not task or task.get("user_id") != user_id:
+        task_allowed = (
+            task is not None
+            and (
+                task.get("team_id") == team_id
+                if team_id
+                else task.get("team_id") is None and task.get("user_id") == user_id
+            )
+        )
+        if not task_allowed:
             raise SocialNotFound("Task not found")
         clip = await self.clip_repo.get_clip_by_id(self.db, clip_id)
         if not clip or clip.get("task_id") != task_id:
@@ -477,7 +567,9 @@ class SocialService:
         if not clip_exists:
             raise SocialValidationError("The clip file is missing; regenerate it first.")
 
-        account = await self.repo.get_user_account(self.db, user_id, social_account_id)
+        account = await self.repo.get_user_account(
+            self.db, user_id, social_account_id, **_team_kw(team_id)
+        )
         if not account or account.get("revoked_at"):
             raise SocialNotFound("Connected account not found")
         if account.get("status") == "reauth_required":
@@ -499,7 +591,9 @@ class SocialService:
             )
 
         if provider.name == "tiktok":
-            options = await self.publishing_options(user_id, account["id"])
+            options = await self.publishing_options(
+                user_id, account["id"], team_id=team_id
+            )
             if normalized_privacy not in options["privacy_levels"]:
                 raise SocialValidationError(
                     "This TikTok account does not currently allow that visibility. "
@@ -515,10 +609,11 @@ class SocialService:
         when = _parse_schedule(scheduled_for)
         now = datetime.now(timezone.utc)
         status = "scheduled" if when and when > now + timedelta(seconds=30) else "queued"
-        if status == "scheduled" and not await self.can_schedule(user_id):
+        if status == "scheduled" and not await self.can_schedule(user_id, team_id=team_id):
             raise SocialPlanRequired(
-                "Scheduling posts is available on the Creator plan. "
-                "You can still publish right away."
+                "Scheduling posts requires an active Team plan. You can still publish right away."
+                if team_id
+                else "Scheduling posts is available on the Creator plan. You can still publish right away."
             )
 
         post = await self.repo.create_post(
@@ -537,6 +632,7 @@ class SocialService:
             media_token=secrets.token_urlsafe(32),
             source_file_path=clip_file,
             clip_snapshot=clip,
+            **_team_kw(team_id),
         )
         if status == "queued":
             await self._enqueue_or_fail(post["id"], int(post.get("attempts") or 0))
@@ -582,22 +678,33 @@ class SocialService:
         clip_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        team_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         return await self.repo.list_posts(
-            self.db, user_id, task_id=task_id, clip_id=clip_id, status=status, limit=limit
+            self.db,
+            user_id,
+            task_id=task_id,
+            clip_id=clip_id,
+            status=status,
+            limit=limit,
+            **_team_kw(team_id),
         )
 
-    async def get_post(self, user_id: str, post_id: str) -> Dict[str, Any]:
-        post = await self.repo.get_user_post(self.db, user_id, post_id)
+    async def get_post(
+        self, user_id: str, post_id: str, *, team_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        post = await self.repo.get_user_post(self.db, user_id, post_id, **_team_kw(team_id))
         if not post:
             raise SocialNotFound("Post not found")
         post["metrics_history"] = await self.repo.list_metrics_history(self.db, post_id)
         return post
 
-    async def cancel_post(self, user_id: str, post_id: str) -> Dict[str, Any]:
+    async def cancel_post(
+        self, user_id: str, post_id: str, *, team_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         # Conditional update: a worker claim or a second click can't race it.
-        if not await self.repo.cancel_post(self.db, user_id, post_id):
-            post = await self.repo.get_user_post(self.db, user_id, post_id)
+        if not await self.repo.cancel_post(self.db, user_id, post_id, **_team_kw(team_id)):
+            post = await self.repo.get_user_post(self.db, user_id, post_id, **_team_kw(team_id))
             if not post:
                 raise SocialNotFound("Post not found")
             raise SocialValidationError(
@@ -607,8 +714,10 @@ class SocialService:
         assert post is not None
         return post
 
-    async def retry_post(self, user_id: str, post_id: str) -> Dict[str, Any]:
-        post = await self.repo.get_user_post(self.db, user_id, post_id)
+    async def retry_post(
+        self, user_id: str, post_id: str, *, team_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        post = await self.repo.get_user_post(self.db, user_id, post_id, **_team_kw(team_id))
         if not post:
             raise SocialNotFound("Post not found")
         if post["status"] not in {"failed", "cancelled"}:
@@ -618,14 +727,20 @@ class SocialService:
         self._provider(post["provider"])
         await self._ensure_not_paused(post["provider"], user_id)
         if post["provider"] == "tiktok":
-            options = await self.publishing_options(user_id, post["social_account_id"])
+            options = await self.publishing_options(
+                user_id, post["social_account_id"], team_id=team_id
+            )
             if post.get("privacy_level") not in options["privacy_levels"]:
                 raise SocialValidationError(
                     "This TikTok account no longer allows the post’s visibility. "
                     "Open Publish to choose an available visibility, or check the account’s privacy settings in TikTok."
                 )
         attempts = await self.repo.requeue_post(
-            self.db, user_id, post_id, media_token=secrets.token_urlsafe(32)
+            self.db,
+            user_id,
+            post_id,
+            media_token=secrets.token_urlsafe(32),
+            **_team_kw(team_id),
         )
         if attempts is None:
             # A concurrent retry (double click) already queued it.
@@ -633,12 +748,14 @@ class SocialService:
         await self._enqueue_or_fail(post_id, attempts)
         return await self.repo.get_post(self.db, post_id) or post
 
-    async def delete_post(self, user_id: str, post_id: str) -> bool:
-        post = await self.repo.get_user_post(self.db, user_id, post_id)
+    async def delete_post(
+        self, user_id: str, post_id: str, *, team_id: Optional[str] = None
+    ) -> bool:
+        post = await self.repo.get_user_post(self.db, user_id, post_id, **_team_kw(team_id))
         if not post:
             return False
         if post["status"] in {"queued", "publishing"} or not await self.repo.delete_post(
-            self.db, user_id, post_id
+            self.db, user_id, post_id, **_team_kw(team_id)
         ):
             raise SocialValidationError("Wait for the post to finish before deleting it.")
         return True
@@ -867,6 +984,64 @@ class SocialService:
                 "attempts": post.get("attempts"),
             },
         )
+        await self._send_publish_notification_if_needed(post["id"])
+
+    async def _send_publish_notification_if_needed(self, post_id: str) -> None:
+        try:
+            context = await self.repo.get_post_notification_context(self.db, post_id)
+        except Exception:  # noqa: BLE001 - notification must never fail publishing
+            logger.exception(
+                "Failed to load publish notification context for post %s", post_id
+            )
+            return
+        if not context:
+            logger.warning("Post %s missing notification context; skipping email", post_id)
+            return
+        if not context.get("notify_on_publish"):
+            return
+        if context.get("publish_notification_sent_at"):
+            logger.info(
+                "Publish notification already sent for post %s; skipping", post_id
+            )
+            return
+        user_email = context.get("user_email")
+        if not user_email:
+            logger.warning(
+                "Post %s has notify_on_publish enabled but user email is missing",
+                post_id,
+            )
+            return
+        email_service = SocialPublishEmailService(self.config)
+        if not email_service.is_configured:
+            logger.warning(
+                "Skipping publish notification for post %s because Amazon SES is not configured",
+                post_id,
+            )
+            return
+        try:
+            await email_service.send_clip_published_email(
+                recipient=SocialPublishRecipient(
+                    email=user_email,
+                    name=context.get("user_name"),
+                    first_name=context.get("user_first_name"),
+                ),
+                provider=context["provider"],
+                title=context.get("title") or context.get("hook_title"),
+                external_url=context.get("external_url"),
+                task_id=context.get("task_id"),
+                account_display_name=context.get("account_display_name"),
+                account_username=context.get("account_username"),
+            )
+            stamped = await self.repo.mark_publish_notification_sent(self.db, post_id)
+            if not stamped:
+                logger.info(
+                    "Publish notification stamp already existed for post %s",
+                    post_id,
+                )
+        except Exception:  # noqa: BLE001 - notification must never fail publishing
+            logger.exception(
+                "Failed to send publish notification for post %s", post_id
+            )
 
     async def _handle_publish_failure(
         self,
@@ -1063,11 +1238,21 @@ class SocialService:
     # ------------------------------------------------------------------
     # Performance loop
     # ------------------------------------------------------------------
-    async def get_performance_summary(self, user_id: str) -> Dict[str, Any]:
-        by_hook = await self.repo.get_performance_by_hook_type(self.db, user_id)
-        by_provider = await self.repo.get_performance_by_provider(self.db, user_id)
-        by_duration = await self.repo.get_duration_performance(self.db, user_id)
-        top_posts = await self.repo.get_top_posts(self.db, user_id, limit=5)
+    async def get_performance_summary(
+        self, user_id: str, *, team_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        by_hook = await self.repo.get_performance_by_hook_type(
+            self.db, user_id, **_team_kw(team_id)
+        )
+        by_provider = await self.repo.get_performance_by_provider(
+            self.db, user_id, **_team_kw(team_id)
+        )
+        by_duration = await self.repo.get_duration_performance(
+            self.db, user_id, **_team_kw(team_id)
+        )
+        top_posts = await self.repo.get_top_posts(
+            self.db, user_id, limit=5, **_team_kw(team_id)
+        )
         measured = sum(row["posts"] for row in by_hook)
         total = sum(row["posts"] for row in by_provider)
         min_posts = max(1, self.config.social_performance_min_posts)
@@ -1082,10 +1267,14 @@ class SocialService:
             "personalization_active": measured >= min_posts,
         }
 
-    async def get_views_timeseries(self, user_id: str, days: int = 30) -> Dict[str, Any]:
+    async def get_views_timeseries(
+        self, user_id: str, days: int = 30, *, team_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Daily new views for the analytics chart, with every day in the window present."""
         days = max(1, min(int(days), 365))
-        rows = await self.repo.get_daily_new_views(self.db, user_id, days=days)
+        rows = await self.repo.get_daily_new_views(
+            self.db, user_id, days=days, **_team_kw(team_id)
+        )
         today = datetime.now(timezone.utc).date()
         window = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
         by_day: Dict[Any, Dict[str, int]] = {day: {} for day in window}
@@ -1105,20 +1294,32 @@ class SocialService:
             "min_days": VIEWS_CHART_MIN_DAYS,
         }
 
-    async def build_performance_context(self, user_id: str) -> Optional[str]:
-        """Compact, prompt-ready summary of what has worked for this creator."""
-        by_hook = await self.repo.get_performance_by_hook_type(self.db, user_id)
+    async def build_performance_context(
+        self, user_id: str, *, team_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Compact, prompt-ready summary of what has worked for this workspace."""
+        by_hook = await self.repo.get_performance_by_hook_type(
+            self.db, user_id, **_team_kw(team_id)
+        )
         measured = sum(row["posts"] for row in by_hook)
         if measured < max(1, self.config.social_performance_min_posts):
             return None
-        by_duration = await self.repo.get_duration_performance(self.db, user_id)
-        top_posts = await self.repo.get_top_posts(self.db, user_id, limit=3)
+        by_duration = await self.repo.get_duration_performance(
+            self.db, user_id, **_team_kw(team_id)
+        )
+        top_posts = await self.repo.get_top_posts(
+            self.db, user_id, limit=3, **_team_kw(team_id)
+        )
         return format_performance_context(by_hook, by_duration, top_posts, measured)
 
 
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+def _team_kw(team_id: Optional[str]) -> Dict[str, Any]:
+    return {"team_id": team_id} if team_id else {}
+
+
 def _decrypt_or_none(value: Optional[str]) -> Optional[str]:
     if not value:
         return None

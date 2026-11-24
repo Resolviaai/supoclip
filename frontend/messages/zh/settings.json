@@ -29,9 +29,11 @@
   },
   "notifications": {
     "title": "通知",
-    "description": "短片做好后，我们怎么通知你。",
+    "description": "我们如何向你发送短片通知。",
     "emails": "完成邮件",
-    "emailsHint": "生成一结束就给你发邮件。"
+    "emailsHint": "生成一结束就给你发邮件。",
+    "publishEmails": "发布邮件",
+    "publishEmailsHint": "短片发布到已关联账号后立即给你发邮件。"
   },
   "plan": {
     "title": "方案与账单",
@@ -52,7 +54,7 @@
     "upgrade": "升级",
     "upgradeMultiplier": "使用 {plan} 获得 {multiplier} 倍视频额度",
     "upgradeMore": "用 {plan} 做更多",
-    "upgradeDescription": "${price}/月 · 每月 {minutes} · {resolution} · YouTube 最长 {length}",
+    "upgradeDescription": "${price}/月 · 每月 {minutes} · {resolution} · 单个视频最长 {length}",
     "choose": "选择 {name}",
     "actionFailed": "账单操作失败",
     "usageMinutesOf": "{used} / {limit} 分钟",
@@ -70,7 +72,14 @@
     "monthlyEquivalentYearly": "${price}/月，按年计费",
     "transferCancel": "取消订阅",
     "transferCancelConfirm": "要取消订阅的后续续费吗？已付款的使用期限仍然有效。",
-    "transferCancelSuccess": "已取消后续续费。"
+    "transferCancelSuccess": "已取消后续续费。",
+    "teamWorkspaceTitle": "当前工作区：{team}",
+    "teamWorkspaceBody": "此工作区的账单、共享视频时长和席位请在团队设置中管理。",
+    "manageTeam": "管理团队与席位",
+    "teamPriceMonthly": "${price}/月 + ${extraPrice}/额外席位",
+    "teamPriceYearly": "${price}/年 + ${extraPrice}/额外席位",
+    "teamSummary": "含 {seats} 个席位和每月 {hours} 小时共享时长。每个额外席位增加 +{extraHours} 小时。",
+    "createTeamCta": "创建团队"
   },
   "links": {
     "agentsTitle": "智能体与 API",
@@ -78,7 +87,9 @@
     "socialTitle": "社交账号",
     "socialDescription": "连接 YouTube、TikTok 和 Instagram，发布短片并查看表现",
     "creatorTitle": "创作者计划",
-    "creatorDescription": "制作关于 SupoClip 的视频，免费获得 Pro，并给你的观众一个代码"
+    "creatorDescription": "制作关于 SupoClip 的视频，免费获得 Pro，并给你的观众一个代码",
+    "teamTitle": "团队与工作区",
+    "teamDescription": "共享每月视频时长、管理席位并邀请剪辑师协作"
   },
   "save": {
     "saved": "偏好已保存！",
@@ -188,14 +199,14 @@
   },
   "creator": {
     "title": "创作者计划",
-    "intro": "在做关于 SupoClip 的视频？领取你的代码：观众可获得<em>前 3 个月 20% 折扣</em>，你则免费获得 SupoClip Pro。",
+    "intro": "在做关于 SupoClip 的视频？获取你自己的代码：你的观众<em>前 3 个月享 8 折</em>，你免费使用 SupoClip Pro，美国、英国、加拿大、瑞士和欧洲的创作者还能获得<em>观众 {months} 个月内付款的 {percent}%</em>。",
     "howItWorks": "如何运作",
     "signIn": "创建免费账号或登录，申请加入创作者计划。",
     "createAccount": "创建账号",
     "signInAction": "登录",
     "approvedTitle": "你已加入",
     "approvedBadge": "已通过",
-    "approvedBody": "分享你的链接或代码。在计划期间，你的账号免费拥有 Pro。",
+    "approvedBody": "分享你的链接或代码。在计划期间你的账户免费使用 Pro。",
     "yourLink": "你的链接",
     "yourCode": "你的代码",
     "iphoneLink": "你的 iPhone 链接",
@@ -233,6 +244,10 @@
       "from10k": "10,000 – 100,000",
       "from100k": "100,000+"
     },
+    "countryLabel": "你居住的地方",
+    "countryPlaceholder": "选择你的国家/地区",
+    "countryElsewhere": "其他地方",
+    "countryHint": "佣金支付给美国、英国、加拿大、瑞士和欧洲的创作者。其他地方的创作者可免费使用 Pro，并获得给观众的代码。",
     "profileLabel": "主页链接",
     "profilePlaceholder": "https://www.tiktok.com/@you",
     "videoLabel": "你做过的一条关于 SupoClip 的视频",
@@ -240,15 +255,65 @@
     "videoPlaceholder": "https://",
     "planLabel": "你打算怎么推广 SupoClip？",
     "termsTitle": "计划条款",
+    "termCommission": "美国、英国、加拿大、瑞士和欧洲的创作者，可获得使用其代码的客户在网页上前 {months} 个月付款的 {percent}%。佣金会保留 {days} 天，如果付款被退款或拒付会被扣回。",
     "termSponsored": "赞助内容请标明（例如 #ad）。",
     "termAds": "不要用 SupoClip 这个名字投放广告，也不要把代码发到优惠券或折扣网站。",
     "termOwn": "不要使用你自己的代码。",
+    "termTax": "付款通过 Stripe 进行，Stripe 会验证你的身份。你需要自行承担收入相关的税费。",
     "termEnd": "我们可以随时结束计划或移除创作者。",
     "agree": "我同意计划条款",
     "submit": "申请",
     "submitting": "正在提交…",
     "loadFailed": "无法加载你的申请",
-    "submitFailed": "无法提交你的申请"
+    "submitFailed": "无法提交你的申请",
+    "countryPrompt": {
+      "title": "你住在哪里？",
+      "body": "佣金支付给美国、英国、加拿大、瑞士和欧洲的创作者。告诉我们你住在哪里，即可查看收入并设置收款。只能设置一次。",
+      "save": "保存",
+      "failed": "无法保存你的国家/地区"
+    },
+    "noCommission": {
+      "title": "你所在的地方暂不支持佣金",
+      "body": "Stripe 只能向美国、英国、加拿大、瑞士和欧洲的创作者付款。你仍然免费使用 Pro，你的观众用你的代码可享 8 折。"
+    },
+    "earnings": {
+      "title": "你的收入",
+      "terms": "你的客户前 {months} 个月支付的金额，你获得 {percent}%。佣金在每笔付款 {days} 天后可用，余额达到 {minimum} 或以上时每月支付。",
+      "customers": "付费客户",
+      "pending": "待定",
+      "pendingHint": "保留 {days} 天",
+      "available": "可支付",
+      "availableHint": "在下次付款中",
+      "paid": "已支付",
+      "payoutsTitle": "收款",
+      "payoutsOn": "已开启",
+      "setupBody": "佣金通过 Stripe 直接打到你的银行账户。设置大约需要 5 分钟：Stripe 会要求你的姓名、地址、出生日期和银行信息。",
+      "payoutCountry": "收款国家/地区：{country}",
+      "setup": "设置收款",
+      "incompleteBody": "Stripe 还需要一些信息才能给你付款。",
+      "reviewBody": "Stripe 正在核实你的信息。完成后即开启收款。",
+      "finish": "完成设置",
+      "enabledBody": "余额达到 {minimum} 或以上时，每月通过银行转账付款一次。",
+      "dashboard": "打开 Stripe 控制台",
+      "unavailableBody": "暂时无法连接 Stripe。请几分钟后再试。",
+      "activityTitle": "动态",
+      "activityEmpty": "暂无记录。有人用你的代码订阅后，佣金会显示在这里。",
+      "kind": {
+        "earned": "佣金",
+        "refund": "退款",
+        "dispute": "拒付",
+        "dispute_won": "拒付胜诉"
+      },
+      "status": {
+        "paid": "已支付",
+        "onTheWay": "支付中",
+        "deducted": "已扣除",
+        "heldUntil": "保留至 {date}",
+        "available": "可用"
+      },
+      "loadFailed": "无法加载你的收入",
+      "setupFailed": "无法打开 Stripe。请重试。"
+    }
   },
   "deleteAccount": {
     "title": "危险操作",
@@ -268,7 +333,9 @@
     "message": "你的上次付款失败了。请更新付款方式以保留你的方案。",
     "action": "更新付款方式",
     "failed": "无法打开账单门户",
-    "paused": "在这笔付款完成之前，剪辑会暂停。"
+    "paused": "在这笔付款完成之前，剪辑会暂停。",
+    "teamMessage": "你的团队上次付款失败了。请更新付款方式以保留团队套餐。",
+    "teamAskOwner": "请联系团队所有者更新付款方式。"
   },
   "cancel": {
     "scheduled": "你的订阅将于 <strong>{date}</strong> 取消。",
@@ -294,5 +361,57 @@
     "unsupported": "未完全支持（常见语言）：",
     "all": "全部支持的语言（{count}）",
     "fallback": "缺少的字符会用后备字体，看起来可能不一样。覆盖范围根据这个字体文件检查；少见字符请预览字幕。"
+  },
+  "emailChange": {
+    "title": "账户",
+    "description": "你用于登录的邮箱地址。",
+    "label": "邮箱地址",
+    "verified": "已验证",
+    "unverified": "未验证",
+    "action": "更改邮箱",
+    "dialogTitle": "更改邮箱",
+    "stepOf": "第 {step} 步，共 2 步",
+    "intro": "我们会先向 <strong>{email}</strong> 发送验证码，确认是你本人。",
+    "unverifiedNote": "该地址尚未验证。输入验证码后也会一并完成验证。",
+    "password": "当前密码",
+    "noPassword": "你的账户没有设置密码，因此需要通过验证码确认是你本人。",
+    "sendCurrent": "发送验证码",
+    "codeSent": "请输入我们发送到 <strong>{email}</strong> 的 6 位验证码。",
+    "codeLabel": "验证码",
+    "codeHint": "验证码 10 分钟内有效。如果没有收到，请检查垃圾邮件文件夹。",
+    "resend": "重新发送验证码",
+    "resendIn": "{seconds} 秒后可重新发送",
+    "useDifferent": "使用其他地址",
+    "verify": "验证",
+    "confirm": "更改邮箱",
+    "currentConfirmed": "当前地址已确认。",
+    "newLabel": "新邮箱地址",
+    "newHint": "我们会向该地址发送验证码。输入验证码后邮箱才会更改。",
+    "sendNew": "发送验证码",
+    "finishing": "两个地址都已确认，但我们无法更新你账单账户中的邮箱。你的邮箱尚未更改。",
+    "retry": "重试",
+    "doneTitle": "邮箱已更改",
+    "done": "你现在使用 <strong>{email}</strong> 登录。收据和通知也会发送到该地址。",
+    "doneDetails": "我们已让你在其他设备上退出登录，并向 {previous} 发送了通知。",
+    "close": "完成",
+    "errors": {
+      "generic": "出了点问题，请重试。",
+      "passwordRequired": "请输入当前密码。",
+      "invalidPassword": "密码不正确。",
+      "reauthRequired": "为了安全，请先退出并重新登录，然后再更改邮箱。",
+      "rateLimited": "尝试次数过多，请在 {minutes} 分钟后重试。",
+      "cooldown": "验证码刚刚已发送，{seconds} 秒后可再次获取。",
+      "noRequest": "此请求已过期或已被替换，请重新开始。",
+      "wrongCode": "验证码不正确。",
+      "wrongCodeLeft": "验证码不正确。{count, plural, =0 {请获取新的验证码。} other {还可尝试 # 次。}}",
+      "codeExpired": "验证码已过期，请获取新的验证码。",
+      "tooManyAttempts": "错误次数过多，请获取新的验证码。",
+      "invalidEmail": "请输入有效的邮箱地址。",
+      "sameEmail": "这已经是你的邮箱地址。",
+      "emailTaken": "该邮箱地址已被其他账户使用。",
+      "sendFailed": "无法发送邮件，请重试。",
+      "billingUpdateFailed": "无法更新你的账单邮箱，因此没有任何更改。请重试。",
+      "inProgress": "正在保存你的邮箱更改。请稍等片刻后再查看。"
+    }
   }
 }

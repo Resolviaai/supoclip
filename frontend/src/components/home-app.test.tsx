@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { invalidateWorkspaces } from "@/hooks/use-workspace";
 import { WORKFLOWS } from "@/lib/workflows";
 import HomeApp from "./home-app";
 
@@ -29,6 +30,20 @@ vi.mock("@/lib/video-upload", async (importOriginal) => ({
 }));
 
 vi.mock("@/lib/datafast", () => ({ track: analytics.track }));
+const productEvents = vi.hoisted(() => ({ trackEvent: vi.fn() }));
+vi.mock("@/lib/analytics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/analytics")>()),
+  trackEvent: productEvents.trackEvent,
+}));
+
+// The tour host's own behaviour is tested in feature-tour.test.tsx; here we only need what the page hands it.
+const tour = vi.hoisted(() => ({ props: null as null | { onSettingsSection?: (id: string) => void; onEnd?: () => void } }));
+vi.mock("@/components/feature-tour", () => ({
+  FeatureTourHost: (props: { onSettingsSection?: (id: string) => void; onEnd?: () => void }) => {
+    tour.props = props;
+    return null;
+  },
+}));
 
 const billingSummary = {
   monetization_enabled: true,
@@ -59,6 +74,22 @@ const workflowsInfo = {
   instructions_max_chars: 500,
 };
 
+const editStylesInfo = {
+  enabled: true,
+  intensities: ["off", "subtle", "bold", "max"],
+  defaults: { sfx: true, music: true, music_mood: "auto", zooms: true, shake: true, transitions: true, speed: true, censor: "bleep_bar", grade: "auto", grain: false, progress_bar: false, loop_ending: false, wait_for_it: true, reactions: false },
+  settings: [],
+  music_moods: ["hype", "chill", "dramatic", "funny", "inspiring", "dark"],
+  grades: ["none", "punchy", "warm", "teal_orange", "noir", "vhs", "dream"],
+  templates: ["marker_circle", "emoji_drop", "slam", "behind_head", "stat_counter", "kinetic_stack", "decode_glitch", "highlighter_swipe", "face_doodles"],
+  reactions_available: false,
+};
+const legacyTemplates = [
+  { id: "default", name: "Default", description: "Punchy", animation: "karaoke", font_color: "#FFFFFF" },
+  { id: "mrbeast", name: "MrBeast", description: "Bold", animation: "pop", font_color: "#FFFFFF" },
+];
+const fxTemplates = editStylesInfo.templates.map((id) => ({ id, name: id, description: "", animation: "pop", fx: true, requires: [] }));
+
 const LINK = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 // Exactly what the create screen sent before workflows existed.
 const LEGACY_KEYS = [
@@ -67,6 +98,8 @@ const LEGACY_KEYS = [
 ];
 
 let workflowsResponse: () => Response | Promise<Response>;
+let editStylesResponse: () => Response | Promise<Response>;
+let templateRequests: string[];
 let createResponse: () => Response;
 let savedClipLength: string;
 let created: Record<string, unknown>[];
@@ -75,13 +108,22 @@ let settingsSaves: Array<{ createSettings: Record<string, unknown>; fontFamily?:
 let savedCreateSettings: unknown;
 let savedFontFamily: string;
 let storage: Map<string, string>;
+let summaryResponse: Record<string, unknown>;
+let teamsResponse: Record<string, unknown>;
 
 beforeEach(() => {
+  summaryResponse = billingSummary;
+  teamsResponse = {};
+  // The billing and workspace hooks keep their last answer for a few seconds. Nothing is
+  // mounted here, so this only forgets what the previous test's workspace left behind.
+  invalidateWorkspaces();
   navigation.params = new URLSearchParams();
   navigation.replace.mockReset();
   durations.seconds = null;
   analytics.track.mockReset();
   workflowsResponse = () => Response.json(workflowsInfo);
+  editStylesResponse = () => Response.json({ ...editStylesInfo, enabled: false });
+  templateRequests = [];
   createResponse = () => Response.json({ task_id: "task-1" });
   savedClipLength = "medium";
   created = [];
@@ -97,8 +139,10 @@ beforeEach(() => {
   });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes("billing-summary")) return Response.json(billingSummary);
+    if (url.includes("billing-summary")) return Response.json(summaryResponse);
+    if (url.includes("/api/teams")) return Response.json(teamsResponse);
     if (url.includes("/api/tasks/workflows")) return workflowsResponse();
+    if (url.includes("/api/tasks/edit-styles")) return editStylesResponse();
     if (url.includes("/api/tasks/create")) {
       created.push(JSON.parse(String(init?.body)));
       return createResponse();
@@ -112,7 +156,10 @@ beforeEach(() => {
     }
     if (url.includes("/api/tasks")) return Response.json({ tasks: [] });
     if (url.includes("/api/fonts")) return Response.json({ fonts: [] });
-    if (url.includes("caption-templates")) return Response.json({ templates: [] });
+    if (url.includes("caption-templates")) {
+      templateRequests.push(url);
+      return Response.json({ templates: url.includes("include=fx") ? [...legacyTemplates, ...fxTemplates] : legacyTemplates });
+    }
     if (url.includes("announcements")) return Response.json({ announcements: [] });
     if (url.includes("social")) return Response.json({ enabled: false });
     if (url.includes("service-status")) return Response.json({ status: "operational" });
@@ -800,5 +847,312 @@ describe("remembering settings between videos", () => {
     const last = settingsSaves[settingsSaves.length - 1];
     expect(last.createSettings).toMatchObject({ captionTemplate: "default", includeBroll: false, advanced: {} });
     expect(last.fontFamily).toBe("TikTokSans-Regular");
+  });
+});
+
+describe("in a team workspace", () => {
+  const TEAM = {
+    id: "team_example_1", name: "Northwind Studio", slug: "northwind", ownerId: "user-9", role: "member",
+    plan: "team", subscriptionStatus: "active", seatLimit: 3, memberCount: 2, pendingInviteCount: 0, occupiedSeats: 2,
+  };
+  const teamSummary = {
+    ...billingSummary, plan: "team", subscription_provider: "stripe", workspace_type: "team", team_id: TEAM.id,
+    team_name: TEAM.name, seat_limit: 3, usage_minutes: 400, minute_limit: 3600, remaining_minutes: 3200,
+  };
+
+  async function renderTeamHome(summary: Record<string, unknown>, role = "member") {
+    summaryResponse = summary;
+    teamsResponse = { activeTeamId: TEAM.id, teams: [{ ...TEAM, role }] };
+    // Both hooks keep their last answer for a few seconds; these tests each start in another workspace state.
+    invalidateWorkspaces();
+    await renderHome();
+  }
+
+  afterEach(() => invalidateWorkspaces());
+
+  it("tells a member whose seat is paused to ask an admin, and sells them nothing", async () => {
+    await renderTeamHome({
+      ...teamSummary, can_create_task: false, upgrade_required: false,
+      member_minute_limit: 0, member_usage_minutes: 0, member_remaining_minutes: 0, member_limit_reached: true,
+    });
+    expect(await screen.findByText("Your seat is paused for new videos")).toBeVisible();
+
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate clips" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/A team admin paused video generation for your seat/)).toBeVisible();
+    expect(within(dialog).queryByRole("link")).toBeNull();
+    expect(within(dialog).queryByText(/60 hours|Manage team/)).toBeNull();
+    expect(created).toHaveLength(0);
+  });
+
+  it("shows a member their own limit when one video is longer than what they have left", async () => {
+    await renderTeamHome({
+      ...teamSummary, member_minute_limit: 600, member_usage_minutes: 588, member_remaining_minutes: 12, member_limit_reached: false,
+    });
+    createResponse = () => Response.json({
+      detail: {
+        code: "SUBSCRIPTION_REQUIRED",
+        message: "This video is 30 minutes long and you have 12 minutes left in your monthly team limit.",
+        billing: { ...teamSummary, required_minutes: 30, member_minute_limit: 600, member_remaining_minutes: 12, member_limit_reached: true },
+      },
+    }, { status: 402 });
+
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    const button = screen.getByRole("button", { name: "Generate clips" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("This video needs 30 minutes, and you have 12 left in your limit")).toBeVisible();
+    expect(within(dialog).queryByText(/3200/)).toBeNull();
+    expect(within(dialog).queryByRole("link")).toBeNull();
+  });
+
+  it("points an unsubscribed team at team settings instead of solo plan prices", async () => {
+    const inactive = { ...teamSummary, plan: "free", subscription_status: "inactive", subscription_provider: null, can_create_task: false, upgrade_required: true };
+    await renderTeamHome(inactive, "owner");
+    expect(await screen.findByText("Northwind Studio doesn't have an active Team plan")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Team settings" })).toBeVisible();
+    expect(screen.queryByTestId("start-plan-card")).toBeNull();
+  });
+
+  it("tells a member of an unsubscribed team who can start the plan", async () => {
+    const inactive = { ...teamSummary, plan: "free", subscription_status: "inactive", subscription_provider: null, can_create_task: false, upgrade_required: true };
+    await renderTeamHome(inactive, "member");
+    expect(await screen.findByText("Ask the team owner to start the Team plan.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Team settings" })).toBeNull();
+    expect(screen.queryByTestId("start-plan-card")).toBeNull();
+  });
+});
+
+describe("dynamic edits", () => {
+  beforeEach(() => {
+    // jsdom has no canvas; the tiles just don't draw.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  });
+
+  const enable = () => { editStylesResponse = () => Response.json(editStylesInfo); };
+
+  async function renderWithEdits() {
+    enable();
+    await renderHome();
+    await waitFor(() => expect(templateRequests).toContain("/api/caption-templates?include=fx"));
+  }
+
+  it("adds exactly edit_style for a bold request", async () => {
+    await renderWithEdits();
+    openSection(/Edits/);
+    const group = screen.getByRole("radiogroup", { name: "Edit intensity" });
+    expect(group).toHaveAttribute("data-tour", "edit-intensity");
+    expect(within(group).getByRole("radio", { name: /Off/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("switch", { name: "Sound effects" })).not.toBeInTheDocument();
+    pick(/Bold/);
+    fireEvent.click(screen.getByRole("button", { name: "Fine-tune" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Music" }));
+    expect(settingsChip()).toHaveAccessibleName(/Bold/);
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    const body = await submit("Generate clips");
+    expect(Object.keys(body)).toEqual([...LEGACY_KEYS, "edit_style"]);
+    expect(body.edit_style).toEqual({ intensity: "bold", music: false });
+    expect(body.caption_template).toBe("default");
+  });
+
+  it("sends today's request with edits off, even with the feature on", async () => {
+    await renderWithEdits();
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    const body = await submit("Generate clips");
+    expect(Object.keys(body)).toEqual(LEGACY_KEYS);
+  });
+
+  it("offers animated caption styles as live tiles, and sends the one picked", async () => {
+    await renderWithEdits();
+    openSection(/Captions/);
+    // One list: the classic styles first, then the animated ones.
+    const tiles = screen.getByRole("radiogroup", { name: "Caption style" });
+    expect(tiles).toHaveAttribute("data-tour", "caption-styles");
+    const names = within(tiles).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"));
+    expect(names).toHaveLength(11);
+    expect(names.slice(0, 2)).toEqual(["Default", "MrBeast"]);
+    expect(screen.getAllByRole("radiogroup", { name: "Caption style" })).toHaveLength(1);
+    // Font and colour stay folded away until asked for.
+    expect(screen.queryByText("Color")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
+    expect(screen.getByText("Color")).toBeInTheDocument();
+    fireEvent.click(within(tiles).getByRole("radio", { name: "Slam" }));
+    expect(within(tiles).getByRole("radio", { name: "Slam" })).toHaveAttribute("aria-checked", "true");
+    expect(settingsChip()).toHaveAccessibleName(/Slam/);
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    const body = await submit("Generate clips");
+    // Style only: the template carries it, intensity off adds nothing.
+    expect(Object.keys(body)).toEqual(LEGACY_KEYS);
+    expect(body.caption_template).toBe("slam");
+  });
+
+  it("hides everything and never asks for animated templates while the feature is off", async () => {
+    savedCreateSettings = { captionTemplate: "slam", editStyle: { intensity: "bold" } };
+    await renderHome();
+    await waitFor(() => expect(templateRequests.length).toBeGreaterThan(0));
+    openSettings();
+    expect(screen.queryByRole("tab", { name: /Edits/ })).not.toBeInTheDocument();
+    openSection(/Captions/);
+    expect(within(screen.getByRole("radiogroup", { name: "Caption style" })).queryByRole("radio", { name: "Slam" })).not.toBeInTheDocument();
+    expect(templateRequests.every((url) => !url.includes("include"))).toBe(true);
+  });
+
+  for (const [label, response] of [
+    ["the flag is off", () => Response.json({ ...editStylesInfo, enabled: false })],
+    ["the fetch fails", () => Promise.reject(new TypeError("offline"))],
+    ["an older backend answers 404", () => new Response("Not found", { status: 404 })],
+  ] as const) {
+    it(`drops a stored bold style and animated template when ${label}, but keeps them saved`, async () => {
+      editStylesResponse = response;
+      savedCreateSettings = { captionTemplate: "slam", editStyle: { intensity: "bold", music: false } };
+      await renderHome();
+      // A save still carries the stored choice, for when the flag comes back.
+      openSection(/Cleanup/);
+      fireEvent.click(screen.getByRole("switch", { name: /Remove filler words/ }));
+      await waitFor(() => expect(settingsSaves.length).toBeGreaterThan(0), { timeout: 2000 });
+      expect(settingsSaves[settingsSaves.length - 1].createSettings).toMatchObject({
+        captionTemplate: "slam", editStyle: { intensity: "bold", music: false },
+      });
+
+      fireEvent.change(urlInput(), { target: { value: LINK } });
+      const body = await submit("Generate clips");
+      expect(Object.keys(body)).toEqual(LEGACY_KEYS);
+      expect(body.caption_template).toBe("mrbeast");
+    });
+  }
+
+  it("keeps the two cleanup switches up front and the fine print behind More options", async () => {
+    await renderWithEdits();
+    openSection(/Cleanup/);
+    expect(screen.getAllByRole("switch")).toHaveLength(2);
+    expect(screen.queryByLabelText("Pause threshold (ms)")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    fireEvent.change(screen.getByLabelText("Pause threshold (ms)"), { target: { value: "800" } });
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    const body = await submit("Generate clips");
+    expect(body.pause_threshold_ms).toBe(800);
+  });
+
+  it("saves the edit style and brings it back", async () => {
+    await renderWithEdits();
+    openSection(/Edits/);
+    pick(/Max/);
+    fireEvent.click(screen.getByRole("button", { name: "Fine-tune" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Sound effects" }));
+    await waitFor(() => expect(settingsSaves.length).toBeGreaterThan(0), { timeout: 2000 });
+    expect(settingsSaves[settingsSaves.length - 1].createSettings.editStyle).toEqual({ intensity: "max", sfx: false });
+
+    cleanup();
+    settingsSaves = [];
+    created = [];
+    savedCreateSettings = { editStyle: { intensity: "subtle", progress_bar: true } };
+    await renderWithEdits();
+    openSection(/Edits/);
+    expect(screen.getByRole("radio", { name: /Subtle/ })).toHaveAttribute("aria-checked", "true");
+    // The folded row says one thing is changed; opened, it is the progress bar.
+    expect(screen.getByRole("button", { name: /Fine-tune/ })).toHaveTextContent("1");
+    fireEvent.click(screen.getByRole("button", { name: /Fine-tune/ }));
+    expect(screen.getByRole("switch", { name: "Progress bar" })).toBeChecked();
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    expect((await submit("Generate clips")).edit_style).toEqual({ intensity: "subtle", progress_bar: true });
+  });
+
+  it("holds Generate until it knows whether saved edits can be sent", async () => {
+    let settle: (response: Response) => void = () => {};
+    editStylesResponse = () => new Promise<Response>((resolve) => { settle = resolve; });
+    savedCreateSettings = { editStyle: { intensity: "bold" } };
+    await renderHome();
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    expect(screen.getByRole("button", { name: "Generate clips" })).toBeDisabled();
+    await act(async () => { settle(Response.json(editStylesInfo)); });
+    expect((await submit("Generate clips")).edit_style).toEqual({ intensity: "bold" });
+  });
+
+  it("opens the settings menu on the section a tour step talks about, and closes it after", async () => {
+    await renderWithEdits();
+    expect(screen.queryByRole("tablist", { name: "Settings" })).not.toBeInTheDocument();
+    act(() => tour.props?.onSettingsSection?.("edits"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Edits/ })).toHaveAttribute("aria-selected", "true"));
+    expect(document.querySelector('[data-tour="edit-intensity"]')).not.toBeNull();
+    // Idempotent: asking again for another section keeps the menu open and switches.
+    act(() => tour.props?.onSettingsSection?.("captions"));
+    await waitFor(() => expect(document.querySelector('[data-tour="caption-styles"]')).not.toBeNull());
+    act(() => tour.props?.onEnd?.());
+    await waitFor(() => expect(screen.queryByRole("tablist", { name: "Settings" })).not.toBeInTheDocument());
+  });
+});
+
+describe("a video over the per-video limit", () => {
+  const tooLong = () => Response.json({
+    detail: {
+      code: "VIDEO_TOO_LONG", message: "This video is 240.0 minutes long.",
+      duration_seconds: 14_400, max_duration_seconds: 7200, range_allowed: true, min_range_seconds: 60,
+    },
+  }, { status: 422 });
+  const eventsNamed = (name: string) => productEvents.trackEvent.mock.calls.filter(([event]) => event === name);
+
+  beforeEach(() => {
+    productEvents.trackEvent.mockClear();
+    // The part picker's slider measures itself.
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => invalidateWorkspaces());
+
+  async function submitLink() {
+    fireEvent.change(urlInput(), { target: { value: LINK } });
+    const button = screen.getByRole("button", { name: "Generate clips" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+  }
+
+  it("reports the refusal once and a chosen part only when a task is made", async () => {
+    summaryResponse = { ...billingSummary, plan: "free", subscription_status: "inactive" };
+    await renderHome();
+    createResponse = tooLong;
+    await submitLink();
+    await screen.findByTestId("source-range-panel");
+    await waitFor(() => expect(eventsNamed("video_too_long_shown")).toHaveLength(1));
+
+    // The same part is already being clipped: nothing new was chosen.
+    createResponse = () => Response.json({ task_id: "task-1", duplicate: true });
+    fireEvent.click(screen.getByRole("button", { name: "Clip this part" }));
+    await waitFor(() => expect(created).toHaveLength(2));
+    await act(async () => {});
+    expect(eventsNamed("source_range_chosen")).toHaveLength(0);
+    expect(eventsNamed("video_too_long_shown")).toHaveLength(1);
+  });
+
+  it("doesn't count a video whose length can't be read as too long", async () => {
+    await renderHome();
+    createResponse = () => Response.json({
+      detail: { code: "VIDEO_DURATION_UNAVAILABLE", message: "We couldn't read this video's length." },
+    }, { status: 422 });
+    await submitLink();
+    await waitFor(() => expect(created).toHaveLength(1));
+    await act(async () => {});
+    expect(eventsNamed("video_too_long_shown")).toHaveLength(0);
+  });
+
+  it("offers a team workspace the part picker but no personal plan", async () => {
+    summaryResponse = {
+      ...billingSummary, plan: "free", subscription_status: "inactive", workspace_type: "team", team_id: "team_example_1",
+    };
+    teamsResponse = { activeTeamId: "team_example_1", teams: [{
+      id: "team_example_1", name: "Northwind Studio", slug: "northwind", ownerId: "user-9", role: "member",
+      plan: "team", subscriptionStatus: "past_due", seatLimit: 3, memberCount: 2, pendingInviteCount: 0, occupiedSeats: 2,
+    }] };
+    invalidateWorkspaces();
+    await renderHome();
+    createResponse = tooLong;
+    await submitLink();
+    const panel = await screen.findByTestId("source-range-panel");
+    expect(within(panel).getByRole("button", { name: "Clip this part" })).toBeVisible();
+    expect(within(panel).queryByRole("button", { name: /Upgrade to/ })).toBeNull();
   });
 });

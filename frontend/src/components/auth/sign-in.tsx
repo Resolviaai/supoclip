@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { signIn } from "../../lib/auth-client";
 import { postAuthPath } from "@/lib/auth-redirect";
@@ -19,6 +19,13 @@ export function SignIn() {
   const [ok, setOk] = useState(false);
   const router = useRouter();
 
+  useEffect(() => {
+    const invitedEmail = new URLSearchParams(window.location.search).get("email")?.trim();
+    if (invitedEmail) {
+      setEmail((current) => current || invitedEmail);
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -30,8 +37,15 @@ export function SignIn() {
       password,
     });
 
+    if (response.error?.code === "EMAIL_NOT_VERIFIED") {
+      // The server has just sent a fresh link.
+      setMessage(t("signIn.notVerified", { email }));
+      setLoading(false);
+      return;
+    }
+
     if (response.error) {
-      setMessage(response.error.message || t("signIn.failed"));
+      setMessage(response.error.message || t(response.error.status >= 500 ? "signIn.serverError" : "signIn.failed"));
       setLoading(false);
       return;
     }

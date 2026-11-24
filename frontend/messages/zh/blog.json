@@ -184,7 +184,7 @@
       },
       "1": {
         "question": "自托管 SupoClip 免费吗？",
-        "answer": "SupoClip 允许非商业用途的自托管和分支。商业使用须事先获得 Shiori LLC 的书面许可。运行它仍然涉及硬件或托管、存储、转写，以及任何付费的 LLM 用量。托管的 SupoClip 有自己的服务条款和价格。"
+        "answer": "SupoClip 允许非商业用途的自托管和分支；个人创作者也可以自托管，为自己的变现频道制作短片。公司、代理机构、客户委托工作和付费托管须事先获得 Shiori LLC 的书面许可。运行它仍然涉及硬件或托管、存储、转写，以及任何付费的 LLM 用量。托管的 SupoClip 有自己的服务条款和价格。"
       },
       "2": {
         "question": "SupoClip 能替代直播剪辑和自动发布吗？",
@@ -330,7 +330,7 @@
     "faqs": {
       "0": {
         "question": "自托管的 SupoClip 免费吗？",
-        "answer": "SupoClip 允许非商业用途的自托管和分支。商业使用须事先获得 Shiori LLC 的书面许可。你仍然要为自己的硬件或服务器，以及所配置的云端转写或 LLM 用量付费。Whisper + Ollama 可以避免按次 AI 费用，但需要足够的本地算力。"
+        "answer": "SupoClip 允许非商业用途的自托管和分支；个人创作者也可以自托管，为自己的变现频道制作短片。公司、代理机构、客户委托工作和付费托管须事先获得 Shiori LLC 的书面许可。你仍然要为自己的硬件或服务器，以及所配置的云端转写或 LLM 用量付费。Whisper + Ollama 可以避免按次 AI 费用，但需要足够的本地算力。"
       },
       "1": {
         "question": "SupoClip 能完全不用云端 AI 服务吗？",
@@ -438,7 +438,7 @@
       "li5": "<strong>修改数据库密码。</strong><code>docker-compose.yml</code> 在四处写死了 <code>supoclip_password</code>：<code>postgres</code> 服务里的 <code>POSTGRES_PASSWORD</code>，以及 <code>frontend</code>、<code>backend</code> 和 <code>worker</code> 服务里的 <code>DATABASE_URL</code>。只改 <code>.env</code> 里的 <code>POSTGRES_PASSWORD</code> 一处都不会变。按下面的做法把四处都覆盖掉。",
       "li6": "<strong>设置 <code>REDIS_PASSWORD</code></strong>；它非空时，Redis 容器会启用 AUTH。",
       "li7": "<strong>关闭注册</strong>：如果实例只给你的团队用，设置 <code>DISABLE_SIGN_UP=true</code>。",
-      "li8": "<strong>看一下这些上限：</strong><code>MAX_VIDEO_DURATION</code>（默认 5400 秒，90 分钟）和 <code>MAX_VIDEO_UPLOAD_BYTES</code>（默认 4 GB）。",
+      "li8": "<strong>看一下上传大小上限：</strong><code>MAX_VIDEO_UPLOAD_BYTES</code>（默认 4 GB）。自托管部署没有视频时长限制。",
       "labelReset": "docker-compose.override.yml（Compose v2.24+）",
       "passwordIntro": "数据库密码方面，在 <code>.env</code> 的 <code>POSTGRES_PASSWORD</code> 里放一个新值。用 <code>openssl rand -hex 24</code> 生成，因为十六进制放进 URL 不用转义。然后在同一份 override 文件里把四处设置都指到它：",
       "labelPassword": "docker-compose.override.yml（合并进你已有的 override）",

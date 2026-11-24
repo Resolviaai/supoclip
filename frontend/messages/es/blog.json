@@ -184,7 +184,7 @@
       },
       "1": {
         "question": "¿Autoalojar SupoClip es gratis?",
-        "answer": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales. El uso comercial requiere la autorización previa por escrito de Shiori LLC. Ejecutarlo igual implica hardware o alojamiento, almacenamiento, transcripción y cualquier uso de pago de un LLM. SupoClip alojado tiene sus propias condiciones de servicio y precios."
+        "answer": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales, y los creadores individuales pueden autoalojarlo para hacer clips para sus propios canales monetizados. Las empresas, las agencias, el trabajo para clientes y el alojamiento de pago requieren la autorización previa por escrito de Shiori LLC. Ejecutarlo igual implica hardware o alojamiento, almacenamiento, transcripción y cualquier uso de pago de un LLM. SupoClip alojado tiene sus propias condiciones de servicio y precios."
       },
       "2": {
         "question": "¿SupoClip puede reemplazar el recorte de transmisiones en vivo y la publicación automática?",
@@ -330,7 +330,7 @@
     "faqs": {
       "0": {
         "question": "¿SupoClip autoalojado es gratis?",
-        "answer": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales. El uso comercial requiere la autorización previa por escrito de Shiori LLC. Igual pagas tu propio hardware o servidor, y cualquier transcripción en la nube o uso de LLM que configures. Una instalación con Whisper y Ollama evita tarifas de IA por solicitud, pero necesita suficiente cómputo local."
+        "answer": "SupoClip permite el autoalojamiento y las bifurcaciones para fines no comerciales, y los creadores individuales pueden autoalojarlo para hacer clips para sus propios canales monetizados. Las empresas, las agencias, el trabajo para clientes y el alojamiento de pago requieren la autorización previa por escrito de Shiori LLC. Igual pagas tu propio hardware o servidor, y cualquier transcripción en la nube o uso de LLM que configures. Una instalación con Whisper y Ollama evita tarifas de IA por solicitud, pero necesita suficiente cómputo local."
       },
       "1": {
         "question": "¿SupoClip puede correr sin servicios de IA en la nube?",
@@ -438,7 +438,7 @@
       "li5": "<strong>Cambia la contraseña de la base de datos.</strong> <code>docker-compose.yml</code> deja fijo <code>supoclip_password</code> en cuatro lugares: <code>POSTGRES_PASSWORD</code> en el servicio <code>postgres</code> y <code>DATABASE_URL</code> en los servicios <code>frontend</code>, <code>backend</code> y <code>worker</code>. Editar solo <code>POSTGRES_PASSWORD</code> en <code>.env</code> no cambia ninguno. Sobrescribe los cuatro, como se muestra abajo.",
       "li6": "<strong>Define <code>REDIS_PASSWORD</code></strong>; el contenedor de Redis activa AUTH cuando no está vacío.",
       "li7": "<strong>Cierra los registros</strong> con <code>DISABLE_SIGN_UP=true</code> si la instancia es solo para tu equipo.",
-      "li8": "<strong>Revisa los límites:</strong> <code>MAX_VIDEO_DURATION</code> (predeterminado 5400 s, 90 minutos) y <code>MAX_VIDEO_UPLOAD_BYTES</code> (predeterminado 4 GB).",
+      "li8": "<strong>Revisa el límite de subida:</strong> <code>MAX_VIDEO_UPLOAD_BYTES</code> (predeterminado 4 GB). Las instalaciones autoalojadas no tienen límite de duración de vídeo.",
       "labelReset": "docker-compose.override.yml (Compose v2.24+)",
       "passwordIntro": "Para la contraseña de la base de datos, pon un valor nuevo en <code>POSTGRES_PASSWORD</code> dentro de <code>.env</code>. Genéralo con <code>openssl rand -hex 24</code>, porque el hexadecimal no necesita escape dentro de una URL. Luego apunta los cuatro ajustes a ese valor en el mismo archivo de override:",
       "labelPassword": "docker-compose.override.yml (fúndelo en cualquier override que ya tengas)",

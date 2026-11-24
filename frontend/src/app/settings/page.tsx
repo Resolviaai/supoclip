@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,17 +11,20 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { PaymentFailedBanner } from "@/components/payment-failed-banner";
 import { SubscriptionCancelBanner } from "@/components/subscription-cancel-banner";
 import { DeleteAccountSection } from "@/components/delete-account-section";
+import { EmailChangeSection } from "@/components/email-change-section";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { useSession } from "@/lib/auth-client";
 import { useSocialAccess } from "@/hooks/use-social-access";
+import { useWorkspace } from "@/hooks/use-workspace";
 import {
   annualFullPrice,
   annualMonthlyEquivalent,
   annualMonthsFree,
   getPublicBillingPlans,
+  getTeamBillingConfig,
   isPaidBillingPlan,
   planPrice,
   type BillingInterval,
@@ -28,23 +32,60 @@ import {
 } from "@/lib/billing-plans";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { BillingIntervalToggle, ComingSoonTag, UpgradeNudge, getUpgradeState, useBillingPlanText } from "@/components/billing/upgrade-prompt";
-import type { BillingSummary } from "@/hooks/use-billing-summary";
+import { billingSummaryKey, useBillingSummary, type BillingSummary } from "@/hooks/use-billing-summary";
+import { createOptionKeys, fetchFonts } from "@/lib/queries/create-options";
+import {
+  settingsKeys,
+  useAwaitPaidPlan,
+  usePreferences,
+  type UserPreferences,
+} from "@/lib/queries/settings-preferences";
 import { startUpgrade } from "@/lib/start-upgrade";
 import { CreatorCodeField } from "@/components/billing/creator-code-field";
 import { UpgradeThankYou } from "@/components/billing/upgrade-thank-you";
 import { toast } from "sonner";
 import { track } from "@/lib/datafast";
 import Link from "next/link";
-import { AlertCircle, Bot, Check, ChevronRight, Clock, CreditCard, Info, Languages, Loader2, Mail, Megaphone, Share2, Type } from "lucide-react";
+import { AlertCircle, Bot, Check, ChevronRight, Clock, CreditCard, Info, Languages, Loader2, Mail, Megaphone, Share2, Type, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DEFAULT_SITE_URL, GITHUB_URL } from "@/lib/site";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 
-interface UserPreferences {
-  fontFamily: string;
-  fontSize: number;
-  fontColor: string;
-  notifyOnCompletion: boolean;
+const NO_FONTS: FontOption[] = [];
+
+/** Paid and billed here: what the plan card thanks someone for after checkout. */
+const isPaidSummary = (summary: BillingSummary) => summary.monetization_enabled && isPaidBillingPlan(summary.plan);
+
+function preferencesSnapshot(preferences: UserPreferences) {
+  return JSON.stringify([
+    preferences.fontFamily,
+    preferences.fontSize,
+    preferences.fontColor,
+    preferences.notifyOnCompletion ?? true,
+    preferences.notifyOnPublish ?? false,
+  ]);
+}
+
+/** Make every font the server offers drawable by name in the font picker. */
+function injectFontFaces(fonts: FontOption[]) {
+  const fontFaceStyles = fonts.map((font) => {
+    return `
+      @font-face {
+        font-family: '${font.name}';
+        src: url('/api/fonts/${font.name}') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+      }
+    `;
+  }).join('\n');
+
+  const styleElement = document.createElement('style');
+  styleElement.id = 'custom-fonts';
+  styleElement.innerHTML = fontFaceStyles;
+
+  // Remove existing custom fonts style if present
+  document.getElementById('custom-fonts')?.remove();
+  document.head.appendChild(styleElement);
 }
 
 export default function SettingsPage() {
@@ -52,26 +93,45 @@ export default function SettingsPage() {
   const [fontSize, setFontSize] = useState(24);
   const [fontColor, setFontColor] = useState("#FFFFFF");
   const [completionEmails, setCompletionEmails] = useState(true);
-  const [availableFonts, setAvailableFonts] = useState<FontOption[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFetching, setIsFetching] = useState(true);
+  const [publishEmails, setPublishEmails] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  // The preferences answer the form was filled from; it is filled once, never over edits.
+  const [seeded, setSeeded] = useState(false);
   const [isBillingActionLoading, setIsBillingActionLoading] = useState(false);
   const [canCancelTransfer, setCanCancelTransfer] = useState(false);
   const [billingInterval, setBillingInterval] = useState<BillingInterval>("month");
   // Back from checkout: wait for the paid plan, then thank them on the plan card.
   const [celebration, setCelebration] = useState<"waiting" | "show" | null>(null);
-  const { data: session, isPending } = useSession();
+  const { data: session, isPending, refetch: refetchSession } = useSession();
+  const userId = session?.user?.id;
+  const queryClient = useQueryClient();
+  const [billingSummary, updateBillingSummary] = useBillingSummary(Boolean(userId));
+  const fontsQuery = useQuery({ queryKey: createOptionKeys.fonts, queryFn: fetchFonts });
+  const availableFonts = fontsQuery.data ?? NO_FONTS;
+  const preferencesQuery = usePreferences(userId);
+  const isFetching = preferencesQuery.isPending;
+  if (preferencesQuery.data && !seeded) {
+    const data = preferencesQuery.data;
+    setSeeded(true);
+    setFontFamily(data.fontFamily);
+    setFontSize(data.fontSize);
+    setFontColor(data.fontColor);
+    setCompletionEmails(data.notifyOnCompletion ?? true);
+    setPublishEmails(data.notifyOnPublish ?? false);
+    setSavedSnapshot(preferencesSnapshot(data));
+  }
   const socialAccess = useSocialAccess(Boolean(session?.user));
+  const { teams, teamsAvailable } = useWorkspace(Boolean(session?.user));
   const t = useTranslations("settings");
   const common = useTranslations("common");
   const tLang = useTranslations("language");
   const plans = useBillingPlanText();
 
   const paidPlans = getPublicBillingPlans();
+  const teamConfig = getTeamBillingConfig();
+  const isTeamWorkspace = billingSummary?.workspace_type === "team";
   const upgradeState = getUpgradeState(billingSummary);
   const paymentNeedsUpdate = upgradeState?.needsPayment ?? false;
   const currentPaidPlan = paidPlans.find((plan) => plan.id === billingSummary?.plan);
@@ -90,37 +150,28 @@ export default function SettingsPage() {
 
   // Stripe's webhook can land a moment after the redirect, so look again for a
   // few seconds. If the plan still isn't paid, fall back to a plain toast.
+  const awaitingPaidPlan = celebration === "waiting" && billingSummary !== null && !isPaidSummary(billingSummary);
+  const paidPlanPoll = useAwaitPaidPlan(awaitingPaidPlan, isPaidSummary);
+  const polledSummary = paidPlanPoll.data;
+  const pollExhausted = paidPlanPoll.exhausted;
+
   useEffect(() => {
     if (celebration !== "waiting" || !billingSummary) return;
-    if (billingSummary.monetization_enabled && isPaidBillingPlan(billingSummary.plan)) {
+    if (isPaidSummary(billingSummary)) {
       setCelebration("show");
       document.getElementById("plan")?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
-    let attempts = 0;
-    const timer = window.setInterval(async () => {
-      attempts += 1;
-      try {
-        const response = await fetch("/api/tasks/billing-summary", { cache: "no-store" });
-        if (response.ok) {
-          const data: BillingSummary = await response.json();
-          if (isPaidBillingPlan(data.plan)) {
-            window.clearInterval(timer);
-            setBillingSummary(data);
-            return;
-          }
-        }
-      } catch {
-        // Try again on the next tick.
-      }
-      if (attempts >= 8) {
-        window.clearInterval(timer);
-        setCelebration(null);
-        toast.success(t("toasts.ready"));
-      }
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [celebration, billingSummary, t]);
+    if (polledSummary && isPaidSummary(polledSummary)) {
+      // Everything showing the plan (the shell too) picks it up.
+      queryClient.setQueryData(billingSummaryKey, polledSummary);
+      return;
+    }
+    if (pollExhausted) {
+      setCelebration(null);
+      toast.success(t("toasts.ready"));
+    }
+  }, [celebration, billingSummary, polledSummary, pollExhausted, queryClient, t]);
 
   const handlePlanChange = async (plan: BillingPlanId, interval: BillingInterval) => {
     setIsBillingActionLoading(true);
@@ -134,94 +185,8 @@ export default function SettingsPage() {
 
   // Load available fonts from backend and inject them into the page
   useEffect(() => {
-    const loadFonts = async () => {
-      try {
-        const response = await fetch('/api/fonts', { cache: 'no-store' });
-        if (response.ok) {
-          const data = await response.json();
-          setAvailableFonts(data.fonts || []);
-
-          // Dynamically load fonts using @font-face
-          const fontFaceStyles = data.fonts.map((font: { name: string }) => {
-            return `
-              @font-face {
-                font-family: '${font.name}';
-                src: url('/api/fonts/${font.name}') format('truetype');
-                font-weight: normal;
-                font-style: normal;
-              }
-            `;
-          }).join('\n');
-
-          // Inject font styles into the page
-          const styleElement = document.createElement('style');
-          styleElement.id = 'custom-fonts';
-          styleElement.innerHTML = fontFaceStyles;
-
-          // Remove existing custom fonts style if present
-          const existingStyle = document.getElementById('custom-fonts');
-          if (existingStyle) {
-            existingStyle.remove();
-          }
-
-          document.head.appendChild(styleElement);
-        }
-      } catch (error) {
-        console.error('Failed to load fonts:', error);
-      }
-    };
-
-    loadFonts();
-  }, []);
-
-  // Load user preferences
-  useEffect(() => {
-    const loadPreferences = async () => {
-      if (!session?.user?.id) return;
-
-      setIsFetching(true);
-      try {
-        const response = await fetch('/api/preferences');
-        if (response.ok) {
-          const data: UserPreferences = await response.json();
-          setFontFamily(data.fontFamily);
-          setFontSize(data.fontSize);
-          setFontColor(data.fontColor);
-          setCompletionEmails(data.notifyOnCompletion ?? true);
-          setSavedSnapshot(JSON.stringify([data.fontFamily, data.fontSize, data.fontColor, data.notifyOnCompletion ?? true]));
-        }
-      } catch (error) {
-        console.error('Failed to load preferences:', error);
-      } finally {
-        setIsFetching(false);
-      }
-    };
-
-    loadPreferences();
-  }, [session?.user?.id]);
-
-  useEffect(() => {
-    const fetchBillingSummary = async () => {
-      if (!session?.user?.id) return;
-
-      try {
-        const response = await fetch("/api/tasks/billing-summary", {
-          cache: "no-store",
-        });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const data: BillingSummary = await response.json();
-        setBillingSummary(data);
-      } catch (fetchError) {
-        console.error("Failed to fetch billing summary:", fetchError);
-      }
-    };
-
-    fetchBillingSummary();
-  }, [session?.user?.id]);
+    if (fontsQuery.data) injectFontFaces(fontsQuery.data);
+  }, [fontsQuery.data]);
 
   const handleBillingAction = async (selectedPlan?: BillingPlanId) => {
     if (!billingSummary?.monetization_enabled) return;
@@ -285,43 +250,49 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSavePreferences = async () => {
-    setIsLoading(true);
-    setError(null);
-    setSuccess(false);
-
-    try {
+  const savePreferences = useMutation({
+    mutationFn: async (preferences: UserPreferences) => {
       const response = await fetch('/api/preferences', {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          fontFamily,
-          fontSize,
-          fontColor,
-          notifyOnCompletion: completionEmails,
-        }),
+        body: JSON.stringify(preferences),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || t("save.failed"));
       }
-
+      return preferences;
+    },
+    onMutate: () => {
+      setError(null);
+      setSuccess(false);
+    },
+    onSuccess: (saved) => {
       track("preferences_saved");
-      setSavedSnapshot(JSON.stringify([fontFamily, fontSize, fontColor, completionEmails]));
+      queryClient.setQueryData(settingsKeys.preferences(userId ?? ""), saved);
+      setSavedSnapshot(preferencesSnapshot(saved));
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
-    } catch (error) {
+    },
+    onError: (error) => {
       console.error('Error saving preferences:', error);
       setError(error instanceof Error ? error.message : t("save.failed"));
-    } finally {
-      setIsLoading(false);
-    }
+    },
+  });
+  const isLoading = savePreferences.isPending;
+
+  const handleSavePreferences = () => {
+    savePreferences.mutate({
+      fontFamily,
+      fontSize,
+      fontColor,
+      notifyOnCompletion: completionEmails,
+      notifyOnPublish: publishEmails,
+    });
   };
-
-
 
   if (isPending || (session?.user && isFetching)) {
     return (
@@ -344,7 +315,7 @@ export default function SettingsPage() {
     );
   }
 
-  const dirty = savedSnapshot !== null && savedSnapshot !== JSON.stringify([fontFamily, fontSize, fontColor, completionEmails]);
+  const dirty = savedSnapshot !== null && savedSnapshot !== JSON.stringify([fontFamily, fontSize, fontColor, completionEmails, publishEmails]);
   // The save bar only appears once there's something to save (and briefly to confirm it).
   const showSaveBar = dirty || isLoading || success;
   const minuteLimit = billingSummary?.minute_limit ?? null;
@@ -366,6 +337,12 @@ export default function SettingsPage() {
         <Section icon={<Languages className="size-4" />} title={tLang("label")} description={t("languageDescription")}>
           <LanguageSwitcher />
         </Section>
+
+        <EmailChangeSection
+          email={session.user.email}
+          emailVerified={session.user.emailVerified}
+          onChanged={() => void refetchSession()}
+        />
 
         <Section tour="settings-captions" icon={<Type className="size-4" />} title={t("captions.title")} description={t("captions.description")}>
           <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_150px]">
@@ -441,12 +418,23 @@ export default function SettingsPage() {
         </Section>
 
         <Section icon={<Mail className="size-4" />} title={t("notifications.title")} description={t("notifications.description")}>
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor="completion-emails" className="flex-col items-start gap-0.5">
-              <span className="text-sm font-medium">{t("notifications.emails")}</span>
-              <span className="text-xs font-normal text-muted-foreground">{t("notifications.emailsHint")}</span>
-            </Label>
-            <Switch id="completion-emails" checked={completionEmails} onCheckedChange={setCompletionEmails} disabled={isLoading} />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="completion-emails" className="flex-col items-start gap-0.5">
+                <span className="text-sm font-medium">{t("notifications.emails")}</span>
+                <span className="text-xs font-normal text-muted-foreground">{t("notifications.emailsHint")}</span>
+              </Label>
+              <Switch id="completion-emails" checked={completionEmails} onCheckedChange={setCompletionEmails} disabled={isLoading} />
+            </div>
+            {socialAccess === true && (
+              <div className="flex items-center justify-between gap-4 border-t pt-4">
+                <Label htmlFor="publish-emails" className="flex-col items-start gap-0.5">
+                  <span className="text-sm font-medium">{t("notifications.publishEmails")}</span>
+                  <span className="text-xs font-normal text-muted-foreground">{t("notifications.publishEmailsHint")}</span>
+                </Label>
+                <Switch id="publish-emails" checked={publishEmails} onCheckedChange={setPublishEmails} disabled={isLoading} />
+              </div>
+            )}
           </div>
         </Section>
 
@@ -502,13 +490,29 @@ export default function SettingsPage() {
               {billingSummary.cancel_at && billingSummary.subscription_provider === "stripe" && (
                 <SubscriptionCancelBanner
                   cancelAt={billingSummary.cancel_at}
-                  onRestarted={() => setBillingSummary((prev) => (prev ? { ...prev, cancel_at: null } : prev))}
+                  onRestarted={() => updateBillingSummary({ cancel_at: null })}
                 />
               )}
 
-              {paymentNeedsUpdate && <PaymentFailedBanner />}
+              {paymentNeedsUpdate && <PaymentFailedBanner teamId={isTeamWorkspace ? billingSummary.team_id : undefined} />}
 
-              {isPaidBillingPlan(billingSummary.plan) ? (
+              {isTeamWorkspace ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/40 p-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold">
+                      {t("plan.teamWorkspaceTitle", {
+                        team: billingSummary.team_name || common("plans.team"),
+                      })}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {t("plan.teamWorkspaceBody")}
+                    </p>
+                  </div>
+                  <Button asChild size="sm">
+                    <Link href="/settings/team">{t("plan.manageTeam")}</Link>
+                  </Button>
+                </div>
+              ) : isPaidBillingPlan(billingSummary.plan) ? (
                 billingSummary.subscription_provider === "apple" ? (
                   <p className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">{t("plan.appStore")}</p>
                 ) : (
@@ -616,12 +620,54 @@ export default function SettingsPage() {
                       </span>
                     </button>
                   ))}
+                  {teamsAvailable && <Link
+                    href="/settings/team"
+                    className="group flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 transition-colors hover:border-foreground/30 sm:col-span-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Users className="size-4 text-muted-foreground" />
+                        <span className="text-sm font-semibold">{common("plans.team")}</span>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {billingInterval === "year"
+                            ? t("plan.teamPriceYearly", {
+                                price: teamConfig.priceAnnual,
+                                extraPrice: teamConfig.seatPriceAnnual,
+                              })
+                            : t("plan.teamPriceMonthly", {
+                                price: teamConfig.priceMonthly,
+                                extraPrice: teamConfig.seatPriceMonthly,
+                              })}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t("plan.teamSummary", {
+                          seats: teamConfig.includedSeats,
+                          hours: Math.round(teamConfig.baseMinuteLimit / 60),
+                          extraHours: Math.round(teamConfig.extraSeatMinuteLimit / 60),
+                        })}
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-foreground">
+                      {t("plan.createTeamCta")}
+                      <ChevronRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+                    </span>
+                  </Link>}
                   <CreatorCodeField className="justify-self-start sm:col-span-2" />
                 </div>
               )}
             </div>
           </Section>
         )}
+
+        {(teamsAvailable || teams.length > 0) && <Link href="/settings/team" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
+          <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Users className="size-4" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">{t("links.teamTitle")}</span>
+            <span className="block text-xs text-muted-foreground">{t("links.teamDescription")}</span>
+          </span>
+          <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        </Link>}
 
         <Link href="/settings/api-keys" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
           <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Bot className="size-4" /></span>

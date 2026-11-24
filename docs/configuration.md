@@ -71,7 +71,9 @@ In most cases, edit `.env` and then rebuild or restart the stack.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `ASSEMBLY_AI_API_KEY` | Yes | Enables word-level transcription used for clip extraction and subtitles |
+| `TRANSCRIPTION_PROVIDER` | No (`assemblyai`) | Selects transcription backend: `assemblyai`, `soniox`, `whisper`, or `youtube_captions` |
+| `ASSEMBLY_AI_API_KEY` | When `assemblyai` | Enables word-level transcription and speaker diarization via AssemblyAI |
+| `SONIOX_API_KEY` | When `soniox` | Enables word-level transcription and speaker diarization via Soniox Async API |
 
 ### LLM selection
 
@@ -97,6 +99,7 @@ The backend can infer a default LLM from whichever API key is present, but setti
 | `BETTER_AUTH_TRUSTED_ORIGINS` | unset | Additional explicit comma-separated HTTP(S) browser origins for authentication; no wildcard support |
 | `BETTER_AUTH_SECRET` | Dev secret | Frontend auth secret; must be changed in non-local environments |
 | `DISABLE_SIGN_UP` | `false` | Prevents creation of new user accounts when set |
+| `EMAIL_VERIFICATION_REQUIRED_SINCE` | unset | ISO 8601 time. Accounts created at or after it get no session until they open the emailed verification link (signing in resends it); older accounts are unaffected. Needs working email (SES). An invalid value stops the frontend from starting |
 | `NEXT_PUBLIC_LANDING_ONLY_MODE` | `false` | Restricts the UI to the landing page only |
 | `TEMP_DIR` | `/app/uploads` in Docker | Working directory for uploads, caches and renders. With `MEDIA_STORAGE=local` the API and workers must share it; with `s3` each machine has its own |
 | `MEDIA_STORAGE` | `local` | `s3` stores durable media in a private bucket; see [Media storage](media-storage.md) for configuration, retention and migration |
@@ -154,6 +157,10 @@ These settings affect clip generation speed, throughput, and defaults.
 | `FAST_MODE_TRANSCRIPT_MODEL` | `universal-3-5-pro` | Fast mode uses the Pro model too; `universal-2` covers languages Pro doesn't. `nano`/`universal-2` select the cheaper model for self-hosting |
 | `ASSEMBLY_AI_SPEECH_MODEL` | Empty | Overrides the AssemblyAI model for every processing mode. Set `universal-2` to use only the non-Pro model while retaining word timings and speaker labels; takes precedence over `FAST_MODE_TRANSCRIPT_MODEL` |
 | `ASSEMBLY_AI_REQUEST_TIMEOUT_SECONDS` | `60` | Per-request upload/submit timeout (5–300). Transient upload failures retry up to 3 times; the paid submission is attempted once |
+| `SONIOX_MODEL` | `stt-async-v6` | Soniox async speech model used when `TRANSCRIPTION_PROVIDER=soniox` |
+| `SONIOX_BASE_URL` | `https://api.soniox.com` | Base URL for the Soniox REST API |
+| `SONIOX_HTTP_TIMEOUT_SECONDS` | `900` | Total status-polling budget in seconds after a Soniox transcription is submitted |
+| `SONIOX_REQUEST_TIMEOUT_SECONDS` | `60` | Per-request upload/submit timeout (5–300) for Soniox. Transient upload failures retry up to 3 times; the paid submission is attempted once |
 | `WHISPER_MODEL_SIZE` | `medium` in `.env.example` | Whisper model size when Whisper is used locally |
 | `QUEUED_TASK_TIMEOUT_SECONDS` | `180` | Marks stale queued tasks as failed instead of leaving them stuck forever |
 | `VIDEO_JOB_USER_CONCURRENCY` | `1` | Long video renders one account may run at once. Extra videos from that account wait without taking a worker slot. `1` is the default because a render can occupy a slot for hours; set `2` to allow two at once |
@@ -162,10 +169,13 @@ These settings affect clip generation speed, throughput, and defaults.
 | `QUEUE_DELAY_ALERT_INTERVAL_SECONDS` | `900` | Minimum time between those queue-delay reports |
 | `EMBED_CRON_WORKER` | `1` | When `1`, the worker process also starts the cron worker on queue `supoclip_cron`. Set `0` if the optional Compose `cron-worker` service (profile `cron`) is running instead, and on video workers that run on a different machine from the API |
 | `UPLOAD_COPY_WAIT_SECONDS` | `1800` | How long a video worker on another machine waits for an upload to be copied from the API's disk to object storage before the task fails (minimum 60). See [Video workers on other machines](./render-worker.md) |
-| `MAX_VIDEO_DURATION` | `5400` | Maximum accepted upload length and baseline YouTube length in seconds |
-| `MAX_VIDEO_UPLOAD_BYTES` | `4000000000` | Maximum uploaded file size, in bytes (4 GB). Checked in the browser before the upload starts, and again by the API and presigned upload session so it cannot be bypassed. Set `NEXT_PUBLIC_MAX_VIDEO_UPLOAD_BYTES` to the same value so the pre-upload check matches before the billing summary loads. Sources above 1080p or 60 fps are scaled down to that ceiling before transcription and rendering; plans with a lower output resolution still receive that lower resolution |
-| `PRO_YOUTUBE_MAX_VIDEO_DURATION` | `5400` | Maximum YouTube length for active or trialing Pro subscriptions, in seconds |
-| `SCALE_YOUTUBE_MAX_VIDEO_DURATION` | `10800` | Maximum YouTube length for active or trialing Creator (`scale`) subscriptions, in seconds |
+| `MAX_VIDEO_DURATION` | `5400` | Maximum source length in seconds without an active paid plan (hosted mode only, `SELF_HOST=false`; self-hosted installs have no video length limit) |
+| `MAX_VIDEO_UPLOAD_BYTES` | `4000000000` | Maximum uploaded file size, in bytes (4 GB), for self-hosted installs, accounts without a paid plan, and the API-spooled `/upload` route. Paid plans use the `*_MAX_VIDEO_UPLOAD_BYTES` caps below. Checked in the browser before the upload starts, and again by the API and presigned upload session so it cannot be bypassed. Set `NEXT_PUBLIC_MAX_VIDEO_UPLOAD_BYTES` to the same value so the pre-upload check matches before the billing summary loads. Sources above 1080p or 60 fps are scaled down to that ceiling before transcription and rendering; plans with a lower output resolution still receive that lower resolution |
+| `PRO_YOUTUBE_MAX_VIDEO_DURATION` | `7200` | Maximum length of one video (any source: YouTube, Twitch, Kick, upload) for active or trialing Pro subscriptions, in seconds (hosted mode only). Keep `NEXT_PUBLIC_PRO_YOUTUBE_MAX_MINUTES` in step |
+| `SCALE_YOUTUBE_MAX_VIDEO_DURATION` | `10800` | Maximum length of one video (any source) for active or trialing Creator (`scale`) subscriptions, in seconds (hosted mode only). Keep `NEXT_PUBLIC_SCALE_YOUTUBE_MAX_MINUTES` in step |
+| `PRO_MAX_VIDEO_UPLOAD_BYTES` | `60000000000` | Maximum direct upload size in bytes for active or trialing Pro subscriptions (60 GB: two hours at about 66 Mbps, above a 4K60 recording; hosted mode only). Checked when the upload is authorized |
+| `SCALE_MAX_VIDEO_UPLOAD_BYTES` | `90000000000` | Same for Creator (`scale`) subscriptions (90 GB: three hours at about 66 Mbps) |
+| `TEAM_MAX_VIDEO_UPLOAD_BYTES` | `90000000000` | Same for Team workspaces (90 GB). Object storage refuses any upload above the largest of these caps |
 | `MAX_CLIPS` | `10` | Hard cap on clips per task in every processing mode |
 | `CLIP_DURATION` | `30` | Default clip duration target in seconds |
 
@@ -207,12 +217,42 @@ Fonts and transitions are configured by mounted files rather than environment va
 - Add `.ttf` or `.otf` files to `backend/fonts/`
 - Add transition `.mp4` files to `backend/transitions/`
 
+### Dynamic edits
+
+Animated caption styles, sound effects, music, zooms and the rest
+([dynamic-edits.md](dynamic-edits.md)). Set these on the API, the video worker,
+the AI worker and every [remote render worker](render-worker.md#dynamic-edits-renderer-deno);
+`docker-compose.yml` passes them to the API and, through `&worker-environment`,
+to every worker. `backend/src/edit_fx/env.py` is the only reader, and unknown
+values fall back to the default.
+
+The `dynamic_edits` feature flag (seeded off on web and iOS, admins bypass)
+decides who can turn effects on; switch it per platform in `/admin`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EDIT_PLAN_LLM` | `LLM` | `provider:model` that tags beats (hooks, numbers, punchlines, swears, …) |
+| `EDIT_PLAN_TIMEOUT_SECONDS` | `45` | One beat-tagging call; past it the clip uses heuristic beats |
+| `EDIT_PLAN_DAILY_LIMIT` | `100` | Studio "Plan edits" requests per user per day |
+| `FX_RUNTIME` | `deno` | `off` is the kill switch: no drawing stage, clips keep captions, SFX, music and bleeps. `legacy` forces the legacy render for every clip with dynamic edits (no SFX, music or bleeps either) |
+| `FX_DENO_BIN` | `deno` | The deno binary (the image pins 2.9.8) |
+| `FX_WARP` | `on` | `off` disables speed ramps and freeze frames |
+| `FX_RENDER_TIMEOUT_SECONDS` | `max(900, 6 × clip seconds)` | Wall-clock limit for one FX render |
+| `FX_LIBRARY_DIR` | `/app/fx_library` | Drop-in sounds (`sfx/`) and music beds (`music/`); the same on every render machine |
+| `FX_LOUDNORM` | `static` | `static` measures the voice and applies one gain; `dynamic` is the old one-pass loudnorm |
+| `FX_CHAIN_MODE` | `pipe` | `file` makes the drawing stage write a file instead of a pipe |
+| `REACTIONS_PROVIDER` | `off` | `giphy` enables optional GIF reactions. Check GIPHY's terms for burned-in media first |
+| `GIPHY_API_KEY` | empty | Needed with `REACTIONS_PROVIDER=giphy` |
+
 ## Redis and Database Settings
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `REDIS_HOST` | `redis` in Docker, `localhost` in code | Redis hostname |
 | `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_CONNECT_TIMEOUT_SECONDS` | `10` | Time arq (API enqueue and every worker) allows to open a Redis connection. The API's enqueue pool uses at most 3 |
+| `REDIS_CONNECT_RETRIES` | `5` | Retries, with backoff, when opening a Redis connection times out or fails, at startup and while a worker runs. While serving requests the API retries at most twice, so a request fails within seconds while Redis is down |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` | `30` | Longest arq (API enqueue and every worker) waits for a Redis reply before treating the connection as dead and retrying on a new one (minimum 1; at most 5 for the API's enqueue pool) |
 | `DATABASE_URL` | injected by Docker | PostgreSQL connection string |
 | `DATABASE_POOL_SIZE` | `5` | Retained SQLAlchemy connections per API/worker process; must be positive |
 | `DATABASE_MAX_OVERFLOW` | `0` | Extra SQLAlchemy connections per process; must be nonnegative |
@@ -278,12 +318,29 @@ These determine whether the app behaves like an open self-hosted product or a mo
 | `AUTH_SIGNATURE_TTL_SECONDS` | `300` | Lifetime of backend request signatures |
 | `PRO_PLAN_MINUTE_LIMIT` | `600` | Hosted-mode Pro allowance, in minutes of source video per month (`0` = unlimited) |
 | `SCALE_PLAN_MINUTE_LIMIT` | `1500` | Hosted-mode Creator (`scale`) allowance, in minutes of source video per month |
+| `TEAM_PLAN_INCLUDED_SEATS` | `3` | Seats included in the Team base subscription |
+| `TEAM_PLAN_MINUTE_LIMIT` | `3600` | Hosted-mode Team base pooled allowance, in minutes of source video per month (60 hours) |
+| `TEAM_EXTRA_SEAT_MINUTE_LIMIT` | `900` | Extra pooled minutes per month added for each seat above `TEAM_PLAN_INCLUDED_SEATS` (+15 hours) |
+| `TEAM_PLAN_AI_EDIT_LIMIT` | `300` | Hosted-mode Team pooled AI edits per month |
+| `TEAM_YOUTUBE_MAX_VIDEO_DURATION` | `10800` | Maximum length of one video (any source) in seconds for Team workspaces (180 minutes; hosted mode only) |
+| `VIDEO_JOB_TEAM_CONCURRENCY` | `3` | Maximum simultaneous video jobs running for a single team workspace |
 | `NEXT_PUBLIC_PRO_PRICE_MONTHLY` | `9.99` | Frontend display price for the Pro plan |
 | `NEXT_PUBLIC_SCALE_PRICE_MONTHLY` | `24.99` | Frontend display price for the Creator plan |
 | `NEXT_PUBLIC_PRO_PRICE_ANNUAL` | `99.90` | Frontend display price for a year of Pro |
 | `NEXT_PUBLIC_SCALE_PRICE_ANNUAL` | `249.90` | Frontend display price for a year of Creator |
 | `NEXT_PUBLIC_PRO_PLAN_MINUTE_LIMIT` | `600` | Frontend display allowance for the Pro plan |
+| `NEXT_PUBLIC_PRO_YOUTUBE_MAX_MINUTES` | `120` | Frontend display per-video length (minutes) for Pro |
+| `NEXT_PUBLIC_SCALE_YOUTUBE_MAX_MINUTES` | `180` | Frontend display per-video length (minutes) for Creator |
 | `NEXT_PUBLIC_SCALE_PLAN_MINUTE_LIMIT` | `1500` | Frontend display allowance for the Creator plan |
+| `NEXT_PUBLIC_TEAM_PRICE_MONTHLY` | `69` | Frontend display monthly price for the Team base plan |
+| `NEXT_PUBLIC_TEAM_PRICE_ANNUAL` | `690` | Frontend display annual price for the Team base plan |
+| `NEXT_PUBLIC_TEAM_SEAT_PRICE_MONTHLY` | `15` | Frontend display monthly price per extra Team seat |
+| `NEXT_PUBLIC_TEAM_SEAT_PRICE_ANNUAL` | `150` | Frontend display annual price per extra Team seat |
+| `NEXT_PUBLIC_TEAM_INCLUDED_SEATS` | `3` | Frontend display included seats for the Team base plan |
+| `NEXT_PUBLIC_TEAM_PLAN_MINUTE_LIMIT` | `3600` | Frontend display base pooled minute allowance for Team |
+| `NEXT_PUBLIC_TEAM_EXTRA_SEAT_MINUTE_LIMIT` | `900` | Frontend display extra pooled minutes per additional Team seat |
+| `NEXT_PUBLIC_TEAM_YOUTUBE_MAX_MINUTES` | `180` | Frontend display max YouTube video length (minutes) for Team |
+| `NEXT_PUBLIC_TEAM_AI_EDIT_LIMIT` | `300` | Frontend display pooled monthly AI edits for Team |
 | `NEXT_PUBLIC_SOCIAL_PUBLISHING` | `soon` | How Creator's scheduled posting appears on pricing pages: `soon` ("Coming soon" tag, YouTube and TikTok), `live`, or `off` |
 
 Plans are metered in minutes of source video. A video's full length, rounded up
@@ -316,11 +373,43 @@ Required when `SELF_HOST=false` and you want subscription management:
 | `STRIPE_SCALE_PRICE_ID` | Price identifier for the Creator (`scale`) plan |
 | `STRIPE_PRO_ANNUAL_PRICE_ID` | Yearly price identifier for the Pro plan |
 | `STRIPE_SCALE_ANNUAL_PRICE_ID` | Yearly price identifier for the Creator plan |
+| `STRIPE_TEAM_PRICE_ID` | Monthly price identifier for the Team base subscription (includes 3 seats) |
+| `STRIPE_TEAM_SEAT_PRICE_ID` | Monthly per-seat add-on price identifier for seats beyond the included 3 |
+| `STRIPE_TEAM_ANNUAL_PRICE_ID` | Yearly price identifier for the Team base subscription |
+| `STRIPE_TEAM_SEAT_ANNUAL_PRICE_ID` | Yearly per-seat add-on price identifier for extra Team seats |
 | `STRIPE_PRO_LEGACY_PRICE_IDS` | Comma-separated earlier Pro prices existing subscribers still pay; they stay Pro and keep 1080p |
 | `STRIPE_SCALE_LEGACY_PRICE_IDS` | Comma-separated earlier Creator prices that still map to Creator |
+| `STRIPE_TEAM_LEGACY_PRICE_IDS` | Comma-separated earlier Team base prices; teams on them keep the Team plan |
+| `STRIPE_TEAM_SEAT_LEGACY_PRICE_IDS` | Comma-separated earlier Team seat prices; their quantities still count as seats |
 | `STRIPE_PRICE_ID` | Legacy fallback price identifier for the Pro plan |
 | `STRIPE_CHECKOUT_URL` | Optional fallback checkout URL |
 | `STRIPE_CUSTOMER_PORTAL_URL` | Optional fallback billing portal URL |
+| `STRIPE_CONNECT_PLATFORM_ACCOUNT_ID` | Optional: the Stripe account that creates creators' Connect Express accounts and pays their commission. Empty = the account new checkouts open in (`STRIPE_CHECKOUT_ACCOUNT_ID`, else the source). See `docs/creator-program.md` |
+
+The billing webhook needs `checkout.session.completed`, `checkout.session.expired`,
+`customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`,
+`invoice.payment_succeeded` and `invoice.payment_failed`. Creator commission also needs
+`charge.refunded`, `charge.dispute.created` and `charge.dispute.closed`, on every billing endpoint.
+
+#### Team plan
+
+A team's subscription is one Team base price plus, above the included seats, one per-seat price with the
+number of extra seats as its quantity. Each team has its own Stripe customer, separate from its members'
+personal subscriptions.
+
+- **Switching it on:** on a hosted install (`SELF_HOST=false`) team workspaces cannot be created until
+  `STRIPE_TEAM_PRICE_ID` (or the yearly price) is set, so a release can ship before its prices exist. With two
+  Stripe accounts it is the price of the account new checkouts go to: `STRIPE_DESTINATION_TEAM_PRICE_ID` when
+  `STRIPE_CHECKOUT_ACCOUNT_ID` is the destination account. Set the prices once the previous release has stopped
+  serving: its webhook handler does not know team subscriptions.
+- **Entitlement:** a team has the Team plan only while its subscription carries a Team base price (current or
+  listed in `STRIPE_TEAM_LEGACY_PRICE_IDS`). A subscription moved to another product in the billing portal or
+  the dashboard does not keep the pooled allowance, so keep plan switching off for team customers in the
+  portal configuration.
+- **Seats:** seats are changed in Team settings, not in the portal. Added seats are invoiced and charged
+  immediately for the rest of the period, and nothing changes if the charge fails. Removed seats take effect
+  at once and are not credited, because the minutes a seat adds can be used the moment it exists.
+- **Invitations:** only a subscribed team sends invitation emails, at most 50 a day.
 
 ## Email and Feedback Settings
 
@@ -332,6 +421,22 @@ Required when `SELF_HOST=false` and you want subscription management:
 | `AWS_ACCESS_KEY_ID` | AWS access key ID used to send hosted billing lifecycle emails |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret access key used to send hosted billing lifecycle emails |
 | `SES_FROM_EMAIL` | Verified sender address for subscription emails, default `SupoClip <onboarding@example.com>` |
+
+#### Unfinished upgrade emails
+
+An upgrade Checkout expires one hour after it opens (`expires_at`) with
+`after_expiration.recovery` enabled. When the webhook receives
+`checkout.session.expired` for a subscription Checkout that still has a free user
+behind it (most often a declined card), it calls `/billing/subscription-email`
+with `{"event":"checkout_recovery","recovery_url":...}`. The backend sends one
+short email with Stripe's recovery link, which stays valid for 30 days. It goes
+through the [product-email preferences](product-update-emails.md), so opted-out
+users get nothing. A user receives at most one per calendar month (a
+`checkout_recovery:<user>:<month>` row in `stripe_webhook_events`, released if
+sending fails so Stripe's retry can send it). Team checkouts are skipped.
+
+Subscribe every Stripe billing webhook endpoint (the root and each account route)
+to `checkout.session.expired`.
 
 #### Scheduled cancellation emails
 

@@ -46,15 +46,24 @@ def word_ends_sentence(text: str) -> bool:
     return bool(SENTENCE_END_RE.search((text or "").strip()))
 
 
-def _next_word_start(transcript_data: Optional[Dict], word_start: float) -> Optional[float]:
-    """Source time where the first word after the one starting at ``word_start`` begins."""
+def _next_word(transcript_data: Optional[Dict], word_start: float) -> Optional[Tuple[float, float]]:
+    """(start, end) of the first word after the one starting at ``word_start``."""
     word_start_ms = int(round(word_start * 1000))
-    starts = [
-        int(word["start"])
+    following = [
+        word
         for word in (transcript_data or {}).get("words") or []
         if int(word["start"]) > word_start_ms
     ]
-    return min(starts) / 1000.0 if starts else None
+    if not following:
+        return None
+    word = min(following, key=lambda item: int(item["start"]))
+    return int(word["start"]) / 1000.0, int(word["end"]) / 1000.0
+
+
+def _next_word_start(transcript_data: Optional[Dict], word_start: float) -> Optional[float]:
+    """Source time where the first word after the one starting at ``word_start`` begins."""
+    following = _next_word(transcript_data, word_start)
+    return following[0] if following else None
 
 
 def _padded_clip_end(
@@ -72,6 +81,7 @@ def _padded_clip_end(
     if next_word_start is not None:
         end = min(end, max(word_end, next_word_start - CLIP_END_NEXT_WORD_GUARD_SECONDS))
     return end
+
 
 
 def extend_keep_ranges_to_sentence_boundary(
@@ -112,6 +122,21 @@ def extend_keep_ranges_to_sentence_boundary(
     boundary_words = [
         word for word in nearby_words if float(word["start"]) <= last_end + 0.05
     ]
+    if (
+        len(boundary_words) >= 2
+        and float(boundary_words[-1]["start"]) >= last_end - 0.005
+        and word_ends_sentence(str(boundary_words[-2].get("text", "")))
+        and float(boundary_words[-2]["end"]) - 0.005
+        <= last_end
+        <= _padded_clip_end(
+            float(boundary_words[-2]["end"]), float(boundary_words[-1]["start"]), padding_seconds
+        )
+        + 0.005
+    ):
+        # The end was held back just before the next sentence (by the padding
+        # guard, on an earlier pass), so that sentence is not in the clip. A
+        # clip extended again keeps its end instead of growing by a sentence.
+        boundary_words = boundary_words[:-1]
     last_boundary_word = boundary_words[-1] if boundary_words else None
     if (
         last_boundary_word
@@ -1076,6 +1101,25 @@ def get_transcript_text_in_range(
     return _join_transcript_tokens([word["text"] for word in relevant_words])
 
 
+EDGE_GAP_MIN_CHECK_SECONDS = 0.6     # a shorter silence at a clip's edge is cut without looking for action
+FILLER_ACTION_MARGIN_SECONDS = 0.25  # action this close to a removed filler is the filler itself
+
+
+def _subtract_intervals(
+    intervals: List[Tuple[float, float]], holes: List[Tuple[float, float]]
+) -> List[Tuple[float, float]]:
+    """``intervals`` without the parts covered by ``holes``, in order."""
+    result = list(intervals)
+    for hole_start, hole_end in holes:
+        result = [
+            piece
+            for start, end in result
+            for piece in ((start, min(end, hole_start)), (max(start, hole_end), end))
+            if piece[1] > piece[0]
+        ]
+    return result
+
+
 def build_clip_keep_ranges(
     video_path: Path,
     clip_start: float,
@@ -1158,29 +1202,53 @@ def build_clip_keep_ranges(
             if removal_end - removal_start >= 0.05:
                 removal_intervals.append((removal_start, removal_end))
 
-        leading_gap = spoken_words[0]["start"] - clip_start
-        if leading_gap >= pause_threshold_seconds:
-            compress_pause(clip_start, spoken_words[0]["start"], 0.0, PAUSE_LEAD_IN_SECONDS)
-
-        internal_gaps = [
-            (current["end"], nxt["start"])
+        # Every silence is checked for action before it is cut: the ones between words, and the ones before
+        # the first word and after the last. Gameplay or music with a single stray word is a clip of the
+        # action, not of that word. Each gap carries the silence kept at its two ends: none at the clip's own
+        # edge, a breath next to a word.
+        gaps: List[Tuple[float, float, float, float]] = []
+        if spoken_words[0]["start"] - clip_start >= pause_threshold_seconds:
+            gaps.append((clip_start, spoken_words[0]["start"], 0.0, PAUSE_LEAD_IN_SECONDS))
+        gaps.extend(
+            (current["end"], nxt["start"], PAUSE_EDGE_PADDING_SECONDS, PAUSE_EDGE_PADDING_SECONDS)
             for current, nxt in zip(spoken_words, spoken_words[1:])
             if nxt["start"] - current["end"] >= pause_threshold_seconds
+        )
+        if clip_end - spoken_words[-1]["end"] >= pause_threshold_seconds:
+            gaps.append((spoken_words[-1]["end"], clip_end, PAUSE_TAIL_SECONDS, 0.0))
+        # An edge gap too short to judge (two frames are needed) is cut as it always was.
+        checked = [
+            index for index, (gap_start, gap_end, keep_first, keep_last) in enumerate(gaps)
+            if (keep_first and keep_last) or gap_end - gap_start >= EDGE_GAP_MIN_CHECK_SECONDS
         ]
-        protected = active_gap_ranges(video_path, internal_gaps, [(word["start"], word["end"]) for word in spoken_words])
-        for (gap_start, gap_end), action in zip(internal_gaps, protected):
-            cursor = gap_start
+        found = active_gap_ranges(
+            video_path,
+            [gaps[index][:2] for index in checked],
+            [(word["start"], word["end"]) for word in spoken_words],
+        ) if checked else []
+        protected: List[List[Tuple[float, float]]] = [[] for _ in gaps]
+        # A filler that is being removed is loud, so it reads as action and would protect the silence around
+        # it: "Um ... so" would open on dead air. Its span is taken out of the action again.
+        fillers = [(start - FILLER_ACTION_MARGIN_SECONDS, end + FILLER_ACTION_MARGIN_SECONDS)
+                   for start, end in removal_intervals]
+        for index, action in zip(checked, found):
+            protected[index] = [
+                window for window in _subtract_intervals(action, fillers)
+                if window[1] - window[0] >= FILLER_ACTION_MARGIN_SECONDS
+            ]
+        for (gap_start, gap_end, keep_first, keep_last), action in zip(gaps, protected):
+            cursor, at_start = gap_start, True
             # Keep detected action, compressing only the quiet windows between it.
             for action_start, action_end in action:
                 if action_start - cursor >= pause_threshold_seconds:
-                    compress_pause(cursor, action_start, PAUSE_EDGE_PADDING_SECONDS, PAUSE_EDGE_PADDING_SECONDS)
-                cursor = max(cursor, action_end)
+                    compress_pause(
+                        cursor, action_start,
+                        keep_first if at_start else PAUSE_EDGE_PADDING_SECONDS, PAUSE_EDGE_PADDING_SECONDS,
+                    )
+                if action_end > cursor:
+                    cursor, at_start = action_end, False
             if gap_end - cursor >= pause_threshold_seconds:
-                compress_pause(cursor, gap_end, PAUSE_EDGE_PADDING_SECONDS, PAUSE_EDGE_PADDING_SECONDS)
-
-        trailing_gap = clip_end - spoken_words[-1]["end"]
-        if trailing_gap >= pause_threshold_seconds:
-            compress_pause(spoken_words[-1]["end"], clip_end, PAUSE_TAIL_SECONDS, 0.0)
+                compress_pause(cursor, gap_end, keep_first if at_start else PAUSE_EDGE_PADDING_SECONDS, keep_last)
 
     merged_removals = _merge_intervals(removal_intervals)
     if not merged_removals:

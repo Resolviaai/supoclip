@@ -86,16 +86,16 @@
   },
   "cleanupTitle": "片段清理",
   "cleanupBody": "渲染时收紧空白，并切掉填充音。",
+  "cleanupMore": "更多选项",
   "shortenPauses": "缩短长停顿",
   "shortenPausesHint": "把长于这个时间的静音剪到一次短呼吸",
   "pauseThreshold": "停顿阈值（毫秒）",
-  "milliseconds": "毫秒",
   "removeFillers": "移除填充词",
   "removeFillersHint": "“嗯”、“呃”、“啊”和类似的声音",
   "extraWords": "额外要剪掉的词或短语",
   "extraWordsPlaceholder": "基本上、真的、说实话",
   "generate": "生成片段",
-  "limitNote": "{plan}：YouTube 视频最长 {minutes} 分钟。每个视频按时长消耗分钟数，开始前会先检查。",
+  "limitNote": "{plan}：单个视频最长 {minutes} 分钟，链接或上传均可。每个视频按时长消耗分钟数，开始前会先检查。",
   "uploadLimits": "上传上限为 {size}。超过 1080p 或 60 fps 的视频会自动缩小，并保持原始比例。",
   "completionEmails": "完成邮件会遵循你在<settings>设置</settings>中的偏好。",
   "recent": "最近",
@@ -129,7 +129,19 @@
     "remaining": "本月剩余 {count} 分钟视频",
     "nearWithPlan": "{refreshes} 需要更多额度？{plan} 每月提供 {limit} 视频。",
     "upgrade": "升级",
-    "limitTitleAll": "你本月的视频分钟数已用完"
+    "limitTitleAll": "你本月的视频分钟数已用完",
+    "teamStartTitle": "{team} 尚未开通团队套餐",
+    "teamStartOwner": "在团队设置中开通后，团队所有成员都可以制作切片。",
+    "teamStartMember": "请联系团队所有者开通团队套餐。",
+    "teamSettings": "团队设置",
+    "memberPausedTitle": "你的席位已暂停生成新视频",
+    "memberPausedBody": "团队管理员暂停了你的视频生成。请联系他们重新开启。",
+    "teamLimitOwner": "{refreshes} 或者增加席位以获得更多共享时长。",
+    "teamLimitMember": "{refreshes} 或者请团队所有者增加席位。",
+    "manageSeats": "增加席位",
+    "memberLimitTitle": "你本月的 {limit} 分钟已用完",
+    "memberLimitBody": "{refreshes} 团队管理员可以提高你的额度。",
+    "memberNearBody": "{refreshes} 团队管理员将你的额度设为每月 {limit} 分钟。"
   },
   "clipLength": {
     "picker": "片段时长",
@@ -344,6 +356,178 @@
       "strict": "只要完全相符的主题",
       "relaxed": "允许",
       "question": "一个问题"
+    }
+  },
+  "edits": {
+    "section": "剪辑",
+    "title": "剪辑强度",
+    "body": "AI 标出关键时刻，你决定每一下有多猛。",
+    "intensity": {
+      "off": {
+        "label": "关闭",
+        "hint": "干净剪切，不加任何东西"
+      },
+      "subtle": {
+        "label": "轻微",
+        "hint": "偶尔重新取景，轻柔背景音乐"
+      },
+      "bold": {
+        "label": "强烈",
+        "hint": "关键时刻推近，切点配重击"
+      },
+      "max": {
+        "label": "极致",
+        "hint": "快速重新取景，更响的重击和音乐"
+      }
+    },
+    "offHint": "开启剪辑效果，在重要时刻加入重新取景、音效和音乐。",
+    "groups": {
+      "sound": "声音",
+      "motion": "动态",
+      "retention": "留住观众"
+    },
+    "options": {
+      "sfx": {
+        "label": "音效",
+        "hint": "切点和图形出现时的短促重击和弹出声"
+      },
+      "music": {
+        "label": "音乐",
+        "hint": "人声出现时自动压低的背景音乐"
+      },
+      "musicMood": "音乐风格",
+      "zooms": {
+        "label": "缩放",
+        "hint": "关键时刻重新取景和短推近"
+      },
+      "shake": {
+        "label": "镜头抖动",
+        "hint": "在最猛的时刻震一下"
+      },
+      "transitions": {
+        "label": "转场",
+        "hint": "片段切换处偶尔一闪"
+      },
+      "speed": {
+        "label": "变速和定格",
+        "hint": "铺垫加速，揭晓前定格"
+      },
+      "censor": {
+        "label": "脏话",
+        "hint": "如何遮盖脏话"
+      },
+      "wait_for_it": {
+        "label": "“等一下”贴纸",
+        "hint": "预告即将到来的高潮"
+      },
+      "progress_bar": {
+        "label": "进度条",
+        "hint": "底部的一条细进度条"
+      },
+      "loop_ending": {
+        "label": "循环结尾",
+        "hint": "结尾渐变回开头，循环播放更顺滑"
+      },
+      "reactions": {
+        "label": "GIF 反应",
+        "hint": "在最好笑的时刻加一个反应 GIF"
+      }
+    },
+    "moods": {
+      "auto": "匹配视频",
+      "hype": "燃",
+      "chill": "轻松",
+      "dramatic": "戏剧",
+      "funny": "搞笑",
+      "inspiring": "励志",
+      "dark": "暗黑",
+      "aggressive": "激烈"
+    },
+    "censor": {
+      "off": "保持原样",
+      "bleep": "哔声",
+      "bleep_bar": "哔声并遮住嘴",
+      "bleep_pixelate": "哔声并给嘴打码"
+    },
+    "fineTune": "微调"
+  },
+  "animatedCaptions": {
+    "title": "动画",
+    "demoLine": "我们的 收入 在 短短 一年 里 增长了 300%",
+    "demoSticker": "不会吧！",
+    "needsFace": "画面中有人脸时效果最好",
+    "templates": {
+      "marker_circle": {
+        "name": "记号笔圈",
+        "description": "在关键词上手绘圆圈、下划线和箭头"
+      },
+      "emoji_drop": {
+        "name": "表情掉落",
+        "description": "文字随说话逐词出现，重要时刻下方出现表情"
+      },
+      "slam": {
+        "name": "重击",
+        "description": "巨大的关键词砸到屏幕上"
+      },
+      "behind_head": {
+        "name": "头后文字",
+        "description": "说话人身后出现一个巨大的词"
+      },
+      "stat_counter": {
+        "name": "数字计数",
+        "description": "说出的数字向上计数并盖章定格"
+      },
+      "kinetic_stack": {
+        "name": "动态堆叠",
+        "description": "开场钩子以粗体逐行堆叠"
+      },
+      "decode_glitch": {
+        "name": "解码故障",
+        "description": "字母乱码后逐个锁定"
+      },
+      "highlighter_swipe": {
+        "name": "荧光笔",
+        "description": "文字随说话逐词出现，关键词放进实色方框"
+      },
+      "face_doodles": {
+        "name": "脸部涂鸦",
+        "description": "跟随说话人脸部的闪光、恶魔角和箭头"
+      }
+    }
+  },
+  "sourceRange": {
+    "start": "开始",
+    "end": "结束",
+    "format": "请使用 h:mm:ss 格式，例如 1:30:00",
+    "first": "前 {minutes} 分钟",
+    "last": "最后 {minutes} 分钟",
+    "selected": "将剪辑 {length}，消耗 {minutes} 分钟。",
+    "problems": {
+      "invalid": "请输入开始和结束时间。",
+      "order": "结束时间必须晚于开始时间。",
+      "outOfBounds": "请选择 0:00 到 {duration} 之间的时间。",
+      "tooShort": "至少选择 {min} 分钟。",
+      "tooLong": "最多选择 {max} 分钟。"
+    }
+  },
+  "tooLongPanel": {
+    "title": "这个 {runtime} 的视频超过了你 {minutes} 分钟的上限",
+    "body": "选择最长 {minutes} 分钟的一段，我们只剪辑这一段。只有这一段计入你的分钟数。",
+    "bodyUpgrade": "选择最长 {minutes} 分钟的一段，我们只剪辑这一段；或升级到 {plan}，单个视频最长 {nextMinutes} 分钟。只有你选的这一段计入分钟数。",
+    "submit": "剪辑这一段",
+    "cancel": "换一个视频",
+    "label": "要剪辑的视频片段",
+    "upgradeTo": "升级到 {plan}（单个视频最长 {minutes} 分钟）",
+    "checkoutFailed": "结账页面没有打开，请稍后再试。"
+  },
+  "lengthErrors": {
+    "durationUnavailable": {
+      "title": "我们无法读取这个视频的时长",
+      "body": "如果是仍在进行的直播，请等直播结束后粘贴完整录像。如果已经结束，请一分钟后再试。未消耗分钟数。"
+    },
+    "tooLongNoRange": {
+      "title": "这个视频超过了你 {minutes} 分钟的上限",
+      "body": "它比你的方案允许的更长，并且这里无法选择其中一段。请使用完整录像或更短的视频。未消耗分钟数。"
     }
   }
 }

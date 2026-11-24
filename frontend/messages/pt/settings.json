@@ -29,9 +29,11 @@
   },
   "notifications": {
     "title": "Notificações",
-    "description": "Como avisamos que seus clipes estão prontos.",
+    "description": "Como avisamos você sobre seus clipes.",
     "emails": "E-mails ao concluir",
-    "emailsHint": "Receba um e-mail assim que uma geração terminar."
+    "emailsHint": "Receba um e-mail assim que uma geração terminar.",
+    "publishEmails": "E-mails ao publicar",
+    "publishEmailsHint": "Receba um e-mail assim que um clipe for publicado em uma conta conectada."
   },
   "plan": {
     "title": "Plano e cobrança",
@@ -52,7 +54,7 @@
     "upgrade": "Fazer upgrade",
     "upgradeMultiplier": "Tenha {multiplier}× mais vídeo com o {plan}",
     "upgradeMore": "Faça mais com {plan}",
-    "upgradeDescription": "${price}/mês · {minutes} por mês · {resolution} · YouTube até {length}",
+    "upgradeDescription": "${price}/mês · {minutes} por mês · {resolution} · vídeos de até {length}",
     "choose": "Escolher {name}",
     "actionFailed": "A ação de cobrança falhou",
     "usageMinutesOf": "{used} / {limit} min",
@@ -70,7 +72,14 @@
     "monthlyEquivalentYearly": "${price}/mês, cobrado anualmente",
     "transferCancel": "Cancelar assinatura",
     "transferCancelConfirm": "Cancelar as próximas renovações da sua assinatura? O período já pago continuará disponível.",
-    "transferCancelSuccess": "As próximas renovações foram canceladas."
+    "transferCancelSuccess": "As próximas renovações foram canceladas.",
+    "teamWorkspaceTitle": "Espaço ativo: {team}",
+    "teamWorkspaceBody": "Cobrança, horas compartilhadas e assentos deste espaço são gerenciados nas configurações da equipe.",
+    "manageTeam": "Gerenciar equipe e assentos",
+    "teamPriceMonthly": "${price}/mês + ${extraPrice}/assento extra",
+    "teamPriceYearly": "${price}/ano + ${extraPrice}/assento extra",
+    "teamSummary": "Inclui {seats} assentos e {hours} horas compartilhadas/mês. Cada assento extra soma +{extraHours} horas.",
+    "createTeamCta": "Criar equipe"
   },
   "links": {
     "agentsTitle": "Agentes e API",
@@ -78,7 +87,9 @@
     "socialTitle": "Contas sociais",
     "socialDescription": "Conecte YouTube, TikTok e Instagram para publicar clipes e acompanhar o desempenho",
     "creatorTitle": "Programa de criadores",
-    "creatorDescription": "Faça vídeos sobre o SupoClip, ganhe o Pro de graça e um código para o seu público"
+    "creatorDescription": "Faça vídeos sobre o SupoClip, ganhe o Pro de graça e um código para o seu público",
+    "teamTitle": "Equipe e espaços de trabalho",
+    "teamDescription": "Compartilhe horas mensais de vídeo, gerencie assentos e convide editores"
   },
   "save": {
     "saved": "Preferências salvas!",
@@ -188,7 +199,7 @@
   },
   "creator": {
     "title": "Programa de criadores",
-    "intro": "Faz vídeos sobre o SupoClip? Pegue seu código: seu público ganha <em>20% de desconto nos 3 primeiros meses</em> e você ganha o SupoClip Pro de graça.",
+    "intro": "Faz vídeos sobre o SupoClip? Pegue seu próprio código: seu público ganha <em>20% de desconto nos primeiros 3 meses</em>, você recebe o SupoClip Pro de graça, e criadores nos EUA, Reino Unido, Canadá, Suíça e Europa ganham <em>{percent}% do que o público paga por {months} meses</em>.",
     "howItWorks": "Como funciona",
     "signIn": "Crie uma conta grátis ou entre para se candidatar ao programa de criadores.",
     "createAccount": "Criar conta",
@@ -233,6 +244,10 @@
       "from10k": "10.000 – 100.000",
       "from100k": "100.000+"
     },
+    "countryLabel": "Onde você mora",
+    "countryPlaceholder": "Escolha seu país",
+    "countryElsewhere": "Em outro lugar",
+    "countryHint": "A comissão é paga a criadores nos EUA, Reino Unido, Canadá, Suíça e Europa. Criadores de outros lugares recebem o Pro de graça e um código para o público.",
     "profileLabel": "Link do perfil",
     "profilePlaceholder": "https://www.tiktok.com/@you",
     "videoLabel": "Um vídeo que você fez sobre o SupoClip",
@@ -240,15 +255,65 @@
     "videoPlaceholder": "https://",
     "planLabel": "Como você vai divulgar o SupoClip?",
     "termsTitle": "Termos do programa",
+    "termCommission": "Criadores nos EUA, Reino Unido, Canadá, Suíça e Europa ganham {percent}% do que os clientes que usam o código deles pagam na web, nos primeiros {months} meses. A comissão fica retida por {days} dias e é descontada se um pagamento for reembolsado ou contestado.",
     "termSponsored": "Marque posts patrocinados (por exemplo #ad).",
     "termAds": "Não anuncie o nome SupoClip nem publique seu código em sites de cupom ou oferta.",
     "termOwn": "Não use o seu próprio código.",
+    "termTax": "Os pagamentos passam pelo Stripe, que verifica sua identidade. Você é responsável pelos impostos sobre o que ganhar.",
     "termEnd": "Podemos encerrar o programa ou remover um criador a qualquer momento.",
     "agree": "Concordo com os termos do programa",
     "submit": "Candidatar",
     "submitting": "Enviando…",
     "loadFailed": "Não foi possível carregar sua candidatura",
-    "submitFailed": "Não foi possível enviar sua candidatura"
+    "submitFailed": "Não foi possível enviar sua candidatura",
+    "countryPrompt": {
+      "title": "Onde você mora?",
+      "body": "A comissão é paga a criadores nos EUA, Reino Unido, Canadá, Suíça e Europa. Diga onde você mora para ver seus ganhos e configurar os pagamentos. Só dá para definir uma vez.",
+      "save": "Salvar",
+      "failed": "Não foi possível salvar seu país"
+    },
+    "noCommission": {
+      "title": "A comissão não está disponível onde você mora",
+      "body": "O Stripe só consegue pagar criadores nos EUA, Reino Unido, Canadá, Suíça e Europa. Você continua com o Pro de graça, e seu público ganha 20% de desconto com seu código."
+    },
+    "earnings": {
+      "title": "Seus ganhos",
+      "terms": "Você ganha {percent}% do que seus clientes pagam nos primeiros {months} meses. A comissão fica disponível {days} dias depois de cada pagamento, e pagamos todo mês quando você tem {minimum} ou mais.",
+      "customers": "Clientes pagantes",
+      "pending": "Pendente",
+      "pendingHint": "Retido por {days} dias",
+      "available": "Pronto para sacar",
+      "availableHint": "No seu próximo pagamento",
+      "paid": "Pago",
+      "payoutsTitle": "Pagamentos",
+      "payoutsOn": "Ativos",
+      "setupBody": "A comissão cai direto na sua conta bancária pelo Stripe. A configuração leva uns 5 minutos: o Stripe pede nome, endereço, data de nascimento e dados bancários.",
+      "payoutCountry": "País de pagamento: {country}",
+      "setup": "Configurar pagamentos",
+      "incompleteBody": "O Stripe ainda precisa de alguns dados antes de poder pagar você.",
+      "reviewBody": "O Stripe está verificando seus dados. Os pagamentos ativam assim que terminar.",
+      "finish": "Concluir configuração",
+      "enabledBody": "Você recebe por transferência uma vez por mês quando tem {minimum} ou mais disponíveis.",
+      "dashboard": "Abrir painel do Stripe",
+      "unavailableBody": "Não conseguimos falar com o Stripe. Tente de novo em alguns minutos.",
+      "activityTitle": "Atividade",
+      "activityEmpty": "Nada ainda. A comissão aparece aqui assim que alguém assina com seu código.",
+      "kind": {
+        "earned": "Comissão",
+        "refund": "Reembolso",
+        "dispute": "Contestação",
+        "dispute_won": "Contestação ganha"
+      },
+      "status": {
+        "paid": "Pago",
+        "onTheWay": "A caminho",
+        "deducted": "Descontado",
+        "heldUntil": "Retido até {date}",
+        "available": "Pronto"
+      },
+      "loadFailed": "Não foi possível carregar seus ganhos",
+      "setupFailed": "Não foi possível abrir o Stripe. Tente de novo."
+    }
   },
   "deleteAccount": {
     "title": "Zona de perigo",
@@ -268,7 +333,9 @@
     "message": "Seu último pagamento falhou. Atualize a forma de pagamento para manter seu plano.",
     "action": "Atualizar forma de pagamento",
     "failed": "Não foi possível abrir o portal de cobrança",
-    "paused": "Os clipes ficam pausados até este pagamento ser concluído."
+    "paused": "Os clipes ficam pausados até este pagamento ser concluído.",
+    "teamMessage": "O último pagamento da sua equipe falhou. Atualize a forma de pagamento para manter o plano Equipe.",
+    "teamAskOwner": "Peça ao proprietário da equipe para atualizar a forma de pagamento."
   },
   "cancel": {
     "scheduled": "Sua assinatura está programada para cancelar em <strong>{date}</strong>.",
@@ -294,5 +361,57 @@
     "unsupported": "Sem suporte completo (idiomas comuns): ",
     "all": "Todos os idiomas compatíveis ({count})",
     "fallback": "Caracteres ausentes usam uma fonte reserva e podem ficar diferentes. A cobertura é verificada neste arquivo de fonte; pré-visualize as legendas para caracteres incomuns."
+  },
+  "emailChange": {
+    "title": "Conta",
+    "description": "O e-mail que você usa para entrar.",
+    "label": "Endereço de e-mail",
+    "verified": "Verificado",
+    "unverified": "Não verificado",
+    "action": "Alterar e-mail",
+    "dialogTitle": "Alterar seu e-mail",
+    "stepOf": "Etapa {step} de 2",
+    "intro": "Primeiro vamos enviar um código para <strong>{email}</strong> para confirmar que é você.",
+    "unverifiedNote": "Este endereço ainda não foi verificado. Digitar o código também o verifica.",
+    "password": "Senha atual",
+    "noPassword": "Sua conta não tem senha, então o código é como você confirma que é você.",
+    "sendCurrent": "Enviar código",
+    "codeSent": "Digite o código de 6 dígitos que enviamos para <strong>{email}</strong>.",
+    "codeLabel": "Código",
+    "codeHint": "O código expira em 10 minutos. Confira a pasta de spam se ele não chegar.",
+    "resend": "Enviar um novo código",
+    "resendIn": "Novo código em {seconds} s",
+    "useDifferent": "Usar outro endereço",
+    "verify": "Verificar",
+    "confirm": "Alterar e-mail",
+    "currentConfirmed": "Seu endereço atual foi confirmado.",
+    "newLabel": "Novo endereço de e-mail",
+    "newHint": "Vamos enviar um código para lá. Seu e-mail só muda depois que você digitá-lo.",
+    "sendNew": "Enviar código",
+    "finishing": "Os dois endereços foram confirmados, mas não conseguimos atualizar o e-mail da sua conta de cobrança. Seu e-mail ainda não mudou.",
+    "retry": "Tentar novamente",
+    "doneTitle": "E-mail alterado",
+    "done": "Agora você entra com <strong>{email}</strong>. Recibos e notificações também vão para lá.",
+    "doneDetails": "Encerramos sua sessão nos outros dispositivos e enviamos um aviso para {previous}.",
+    "close": "Concluir",
+    "errors": {
+      "generic": "Algo deu errado. Tente novamente.",
+      "passwordRequired": "Digite sua senha atual.",
+      "invalidPassword": "Essa senha não está correta.",
+      "reauthRequired": "Por segurança, saia e entre novamente; depois altere seu e-mail.",
+      "rateLimited": "Muitas tentativas. Tente novamente em {minutes} min.",
+      "cooldown": "Um código acabou de ser enviado. Você pode pedir outro em {seconds} segundos.",
+      "noRequest": "Esta solicitação expirou ou foi substituída. Comece de novo.",
+      "wrongCode": "Esse código não está correto.",
+      "wrongCodeLeft": "Esse código não está correto. {count, plural, =0 {Peça um novo código.} one {Resta # tentativa.} other {Restam # tentativas.}}",
+      "codeExpired": "Esse código expirou. Peça um novo.",
+      "tooManyAttempts": "Muitos códigos errados. Peça um novo.",
+      "invalidEmail": "Digite um endereço de e-mail válido.",
+      "sameEmail": "Esse já é o seu endereço de e-mail.",
+      "emailTaken": "Outra conta já usa esse endereço de e-mail.",
+      "sendFailed": "Não conseguimos enviar o e-mail. Tente novamente.",
+      "billingUpdateFailed": "Não conseguimos atualizar seu e-mail de cobrança, então nada mudou. Tente novamente.",
+      "inProgress": "A alteração do seu e-mail já está sendo salva. Aguarde um momento e confira de novo."
+    }
   }
 }

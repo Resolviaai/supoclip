@@ -24,6 +24,7 @@ import { intervalFromPeriod, WebhookAnalytics } from "@/server/analytics";
 import { getPlanIdForStripePrice, hasAnyConfiguredStripePrice } from "@/server/billing-plans";
 import { getPrismaClient } from "@/server/prisma";
 import { getServerStripeClient } from "@/server/stripe";
+import { handleAffiliateCommissionEvent } from "@/server/affiliate-commissions";
 import {
   applyPaidUpgradeInvoice,
   getPaidSubscriptionPlan,
@@ -31,14 +32,24 @@ import {
   syncSubscriptionUpdate,
   upsertSubscriptionState,
 } from "@/server/stripe-subscription-sync";
+import {
+  handleTeamCheckoutCompleted,
+  handleTeamInvoicePaid,
+  handleTeamInvoicePaymentFailed,
+  handleTeamSubscriptionDeleted,
+  handleTeamSubscriptionUpdated,
+  isTeamCheckoutSession,
+  isTeamStripeSubscription,
+} from "@/server/stripe-team-billing";
 import Stripe from "stripe";
 
 type SubscriptionEmailEvent =
-  "subscribed" | "unsubscribed" | "cancellation_scheduled";
+  "subscribed" | "unsubscribed" | "cancellation_scheduled" | "checkout_recovery";
 
 async function sendBackendSubscriptionEmail(
   userId: string,
   event: SubscriptionEmailEvent,
+  extra: Record<string, string> = {},
 ) {
   const response = await fetchBackend("/billing/subscription-email", {
     method: "POST",
@@ -47,7 +58,7 @@ async function sendBackendSubscriptionEmail(
       ...buildBackendAuthHeaders(userId),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ event }),
+    body: JSON.stringify({ event, ...extra }),
     cache: "no-store",
   });
 
@@ -222,6 +233,54 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session, analyti
       },
       set: { plan: paidPlan, subscription_status: subscription.status },
     });
+  }
+}
+
+const PAID_OR_PENDING_STATUSES = new Set(["active", "trialing", "past_due"]);
+
+/**
+ * An upgrade Checkout that expired unfinished (most often a declined card) gets one
+ * email with Stripe's recovery link, at most once per user per calendar month.
+ */
+async function handleCheckoutExpired(session: Stripe.Checkout.Session) {
+  if (session.mode !== "subscription" || isTeamCheckoutSession(session)) return;
+  const userId = session.metadata?.userId;
+  const recoveryUrl = session.after_expiration?.recovery?.url;
+  if (!userId || !recoveryUrl) return;
+
+  const prisma = getPrismaClient();
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { plan: true, subscription_status: true, subscription_provider: true },
+  });
+  if (
+    !user ||
+    user.plan !== "free" ||
+    PAID_OR_PENDING_STATUSES.has(user.subscription_status) ||
+    user.subscription_provider === "apple" ||
+    user.subscription_provider === "affiliate"
+  )
+    return;
+
+  const month = new Date().toISOString().slice(0, 7);
+  const claimId = `checkout_recovery:${userId}:${month}`;
+  try {
+    await prisma.stripeWebhookEvent.create({
+      data: { id: claimId, type: "checkout_recovery", status: "processed" },
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2002") return;
+    throw error;
+  }
+
+  try {
+    await sendBackendSubscriptionEmail(userId, "checkout_recovery", {
+      recovery_url: recoveryUrl,
+    });
+  } catch (error) {
+    // Release the month's claim so Stripe's retry of this event can send it.
+    await prisma.stripeWebhookEvent.delete({ where: { id: claimId } }).catch(() => {});
+    throw error;
   }
 }
 
@@ -428,7 +487,9 @@ export async function handleAccountBillingWebhook(
     assertMode: assertStripeEventMode,
     claim: inbox.claim,
     finish: inbox.finish,
-    dispatch: (event) => dispatchBillingEvent(event, collect(event)),
+    // Commission runs in afterEvent, which also sees events the migration engine handles.
+    dispatch: (event) => dispatchBillingEvent(event, collect(event), { commissions: false }),
+    afterEvent: (event) => handleAffiliateCommissionEvent(event),
     async dispatchCurrent(event, subscription) {
       if (event.type.startsWith("invoice."))
         await syncSubscriptionUpdate(subscription);
@@ -439,8 +500,9 @@ export async function handleAccountBillingWebhook(
         await dispatchBillingEvent(
           { ...event, data: { ...event.data, object: subscription } },
           collect(event),
+          { commissions: false },
         );
-      } else await dispatchBillingEvent(event, collect(event));
+      } else await dispatchBillingEvent(event, collect(event), { commissions: false });
     },
   })(request, accountId);
   // The handler answers 200 only once the event is finished in the inbox.
@@ -452,15 +514,36 @@ export async function handleAccountBillingWebhook(
  * Dispatch only after account ownership and inbox handling have succeeded.
  * Product events go to `analytics`, which the caller flushes once the delivery succeeded.
  */
-export async function dispatchBillingEvent(event: Stripe.Event, analytics?: WebhookAnalytics) {
+export async function dispatchBillingEvent(
+  event: Stripe.Event,
+  analytics?: WebhookAnalytics,
+  { commissions = true }: { commissions?: boolean } = {},
+) {
   const stripe = getServerStripeClient();
   await handleOwnedBillingRisk(event);
   if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
-    await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session, analytics);
+    const checkoutSession = event.data.object as Stripe.Checkout.Session;
+    if (await handleTeamCheckoutCompleted(checkoutSession)) {
+      return;
+    }
+    if (isTeamCheckoutSession(checkoutSession)) {
+      return;
+    }
+    await handleCheckoutCompleted(checkoutSession, analytics);
+  }
+
+  if (event.type === "checkout.session.expired") {
+    await handleCheckoutExpired(event.data.object as Stripe.Checkout.Session);
   }
 
   if (event.type === "customer.subscription.updated") {
     const subscription = event.data.object as Stripe.Subscription;
+    if (await handleTeamSubscriptionUpdated(subscription)) {
+      return;
+    }
+    if (isTeamStripeSubscription(subscription)) {
+      return;
+    }
     if (
       isNewlyScheduledCancellation(subscription, event.data.previous_attributes)
     ) {
@@ -490,15 +573,42 @@ export async function dispatchBillingEvent(event: Stripe.Event, analytics?: Webh
     event.type === "invoice.paid" ||
     event.type === "invoice.payment_succeeded"
   ) {
-    await applyPaidUpgradeInvoice(event.data.object as Stripe.Invoice);
-    await noteSubscriptionRenewal(event.data.object as Stripe.Invoice, analytics);
+    const invoice = event.data.object as Stripe.Invoice;
+    if (await handleTeamInvoicePaid(invoice)) {
+      return;
+    }
+    await applyPaidUpgradeInvoice(invoice);
+    await noteSubscriptionRenewal(invoice, analytics);
+    // Last, so a commission problem never holds up the customer's plan.
+    if (commissions) await handleAffiliateCommissionEvent(event);
   }
 
   if (event.type === "invoice.payment_failed") {
-    await noteUpgradePaymentFailed(event.data.object as Stripe.Invoice);
+    const invoice = event.data.object as Stripe.Invoice;
+    if (await handleTeamInvoicePaymentFailed(invoice)) {
+      return;
+    }
+    await noteUpgradePaymentFailed(invoice);
   }
 
   if (event.type === "customer.subscription.deleted") {
-    await handleSubscriptionDeleted(event.data.object as Stripe.Subscription, analytics);
+    const subscription = event.data.object as Stripe.Subscription;
+    if (await handleTeamSubscriptionDeleted(subscription)) {
+      return;
+    }
+    if (isTeamStripeSubscription(subscription)) {
+      return;
+    }
+    await handleSubscriptionDeleted(subscription, analytics);
+  }
+
+  // Refunds and chargebacks take back creator commission (src/server/affiliate-commissions.ts).
+  if (
+    commissions &&
+    (event.type === "charge.refunded" ||
+      event.type === "charge.dispute.created" ||
+      event.type === "charge.dispute.closed")
+  ) {
+    await handleAffiliateCommissionEvent(event);
   }
 }

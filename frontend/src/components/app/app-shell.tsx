@@ -6,16 +6,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, Bot, ChartColumn, CornerDownLeft, CreditCard, Film, ListChecks, ListOrdered, LogOut, Play, Plus, Search, Settings, Share2, Shield, Sparkles, Target,
+import {
+  Bot, ChartColumn, CornerDownLeft, Film, ListChecks, ListOrdered, Play, Plus, Search, Settings, Share2, Shield, Sparkles, Target, Users,
 } from "lucide-react";
-import { toast } from "sonner";
-import { signOut, useSession } from "@/lib/auth-client";
-import { resetAnalytics } from "@/lib/posthog";
+import { useSession } from "@/lib/auth-client";
 import { useBillingSummary } from "@/hooks/use-billing-summary";
 import { useSocialAccess } from "@/hooks/use-social-access";
-import { billingPlanMessageKey } from "@/lib/billing-plans";
-import { getUpgradeState } from "@/components/billing/upgrade-prompt";
-import { fetchGenerations, timeAgo, type GenerationSummary } from "@/lib/generations";
+import { timeAgo, type GenerationSummary } from "@/lib/generations";
+import { useGenerations } from "@/lib/queries/generations";
 import { StatusBadge } from "@/components/app/status-badge";
 import { Announcements } from "@/components/announcements";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -27,6 +25,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { FeatureTourHost } from "@/components/feature-tour";
+import { WorkspaceSwitcher } from "@/components/workspace/workspace-switcher";
+import { AccountMenu } from "@/components/app/account-menu";
 import type { Workflow } from "@/lib/workflows";
 
 // `mobile: false` keeps an item out of the five-slot mobile tab bar.
@@ -42,17 +42,14 @@ const NAV: NavItem[] = [
   { href: "/settings", labelKey: "settings", icon: Settings, match: (p) => p === "/settings" },
 ];
 
-function initials(name?: string | null, email?: string | null) {
-  const source = name?.trim() || email || "?";
-  return source.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
-}
-
 /** What the create screen tells the tour host; other pages need nothing. */
 export type ShellTour = {
   /** The user is doing something: don't start a tour, and leave one that's showing. */
   busy: boolean;
   onWorkflow?: (workflow: Workflow) => void;
   onEnd?: () => void;
+  /** Open a section of the composer's settings menu for a step that points into it. */
+  onSettingsSection?: (id: string) => void;
 };
 
 /** Signed-in application chrome: sidebar on desktop, tab bar on mobile, ⌘K palette and feature tours everywhere. */
@@ -128,7 +125,9 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
           {!compact && "SupoClip"}
         </Link>
 
-        <SidebarLink compact={compact} href="/" label={t("nav.newGeneration")} shortcut="N" className="mb-4 mt-1 bg-foreground text-background hover:bg-foreground/90 hover:text-background">
+        <WorkspaceSwitcher compact={compact} className="mb-3" />
+
+        <SidebarLink compact={compact} href="/" label={t("nav.newGeneration")} shortcut="N" className="mb-4 bg-foreground text-background hover:bg-foreground/90 hover:text-background">
           <Plus className="size-4" />
         </SidebarLink>
 
@@ -156,10 +155,8 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
           {!compact && <><span className="flex-1 text-left">{t("search.label")}</span><Kbd>⌘K</Kbd></>}
         </button>
 
-        <div className="mt-auto w-full space-y-2 pb-3">
-          <Announcements key={user.id} userId={user.id} compact={compact} className="w-full" />
-          {!compact && billing?.monetization_enabled && <UsageCard billing={billing} />}
-          <UserRow compact={compact} name={user.name} email={user.email} />
+        <div className="mt-auto w-full pb-3">
+          <AccountMenu user={user} billing={billing} compact={compact} />
         </div>
       </aside> : null}
 
@@ -172,6 +169,7 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
                 <span>SupoClip</span>
               </Link>
               <div className="flex items-center gap-1">
+                <WorkspaceSwitcher compact className="size-9 border-0 bg-transparent" />
                 <Announcements key={user.id} userId={user.id} compact />
                 <ThemeToggle tooltipSide="bottom" className="flex size-10 items-center justify-center rounded-lg hover:bg-accent [&_svg]:size-5 active:scale-90 transition-transform" />
                 <button
@@ -182,7 +180,6 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
                 >
                   <Search className="size-5" />
                 </button>
-                <MobileUserMenu user={user} billing={billing} />
               </div>
             </div>
           </header>
@@ -234,6 +231,7 @@ export function AppShell({ children, tour }: { children: React.ReactNode; /** Se
         busy={tour?.busy}
         onWorkflow={tour?.onWorkflow}
         onEnd={tour?.onEnd}
+        onSettingsSection={tour?.onSettingsSection}
       />
     </div>
   );
@@ -266,161 +264,6 @@ function SidebarLink({ href, label, active, compact, shortcut, className, tour, 
   return <Tooltip><TooltipTrigger asChild>{link}</TooltipTrigger><TooltipContent side="right">{label}</TooltipContent></Tooltip>;
 }
 
-function UsageCard({ billing }: { billing: NonNullable<ReturnType<typeof useBillingSummary>[0]> }) {
-  const t = useTranslations("shell");
-  const tCommon = useTranslations("common");
-  const limit = billing.minute_limit ?? null;
-  const used = billing.usage_minutes ?? 0;
-  const pct = limit ? Math.min(100, (used / limit) * 100) : 0;
-  const upgrade = getUpgradeState(billing);
-  const nudge = !upgrade?.isPaid
-    ? t("usage.pickPlan")
-    : upgrade.nextPlan && (upgrade.atLimit || upgrade.nearLimit)
-    ? t("usage.moreWith", { name: tCommon(`plans.${billingPlanMessageKey(upgrade.nextPlan.id)}`) })
-    : null;
-  return (
-    <Link data-tour="usage" href="/settings#plan" className="group block rounded-xl border border-sidebar-border bg-background p-3 text-xs transition-colors hover:border-foreground/20">
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">{tCommon(`plans.${billingPlanMessageKey(billing.plan)}`)}</span>
-        <span className="text-muted-foreground tabular-nums">
-          {limit ? t("usage.minutesOf", { used, limit }) : t("usage.minutes", { used })}
-        </span>
-      </div>
-      {limit ? (
-        <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
-          <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
-        </div>
-      ) : null}
-      {nudge ? (
-        <p className="mt-2 flex items-center gap-1 font-medium text-foreground">
-          {nudge}
-          <ArrowRight className="ml-auto size-3 transition-transform group-hover:translate-x-0.5" />
-        </p>
-      ) : (
-        <p className="mt-2 text-muted-foreground">{limit && upgrade?.remaining !== null ? t("usage.minutesLeft", { count: upgrade?.remaining ?? 0 }) : t("usage.minutesThisMonth")}</p>
-      )}
-    </Link>
-  );
-}
-
-function UserRow({ compact, name, email }: { compact: boolean; name?: string | null; email?: string | null }) {
-  const t = useTranslations("shell");
-  const [signingOut, setSigningOut] = useState(false);
-  const handleSignOut = async () => {
-    setSigningOut(true);
-    try { await signOut(); resetAnalytics(); window.location.assign("/sign-in"); }
-    catch { toast.error(t("user.signOutError")); setSigningOut(false); }
-  };
-  return (
-    <div className={cn("flex items-center gap-2 rounded-lg", compact ? "flex-col" : "px-1.5 py-1")}>
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-amber-400 text-xs font-semibold text-white">
-        {initials(name, email)}
-      </span>
-      {!compact && (
-        <div className="min-w-0 flex-1 leading-tight">
-          <p className="truncate text-sm font-medium">{name || t("user.creator")}</p>
-          <p className="truncate text-xs text-muted-foreground">{email}</p>
-        </div>
-      )}
-      <ThemeToggle tooltipSide={compact ? "right" : "top"} />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button type="button" onClick={() => void handleSignOut()} disabled={signingOut} aria-label={t("user.signOut")}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:opacity-50">
-            <LogOut className="size-4" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side={compact ? "right" : "top"}>{signingOut ? t("user.signingOut") : t("user.signOut")}</TooltipContent>
-      </Tooltip>
-    </div>
-  );
-}
-
-function MobileUserMenu({
-  user,
-  billing,
-}: {
-  user: { name?: string | null; email?: string | null; is_admin?: boolean };
-  billing?: ReturnType<typeof useBillingSummary>[0];
-}) {
-  const t = useTranslations("shell");
-  const tCommon = useTranslations("common");
-  const [signingOut, setSigningOut] = useState(false);
-  const handleSignOut = async () => {
-    setSigningOut(true);
-    try {
-      await signOut();
-      resetAnalytics();
-      window.location.assign("/sign-in");
-    } catch {
-      toast.error(t("user.signOutError"));
-      setSigningOut(false);
-    }
-  };
-
-  const limit = billing?.minute_limit ?? null;
-  const used = billing?.usage_minutes ?? 0;
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={user.name || t("user.creator")}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-amber-400 text-xs font-semibold text-white shadow-xs transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {initials(user.name, user.email)}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 p-2 shadow-2xl rounded-2xl border-border/60">
-        <div className="px-2.5 py-2 border-b border-border/40 mb-1">
-          <p className="font-semibold text-sm truncate">{user.name || t("user.creator")}</p>
-          <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-          {billing?.monetization_enabled && (
-            <div className="mt-2 flex items-center justify-between rounded-lg bg-muted/50 px-2 py-1 text-xs">
-              <span className="font-medium text-foreground">
-                {tCommon(`plans.${billingPlanMessageKey(billing.plan)}`)}
-              </span>
-              <span className="text-muted-foreground tabular-nums">
-                {limit ? t("usage.minutesOf", { used, limit }) : t("usage.minutes", { used })}
-              </span>
-            </div>
-          )}
-        </div>
-        <DropdownMenuItem asChild>
-          <Link href="/settings#plan" className="cursor-pointer">
-            <CreditCard className="size-4" />
-            <span>{t("nav.settings")}</span>
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href="/settings/api-keys" className="cursor-pointer">
-            <Bot className="size-4" />
-            <span>{t("nav.agents")}</span>
-          </Link>
-        </DropdownMenuItem>
-        {user.is_admin && (
-          <DropdownMenuItem asChild>
-            <Link href="/admin" className="cursor-pointer">
-              <Shield className="size-4" />
-              <span>{t("nav.admin")}</span>
-            </Link>
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          disabled={signingOut}
-          onSelect={() => void handleSignOut()}
-          className="cursor-pointer"
-        >
-          <LogOut className="size-4" />
-          <span>{signingOut ? t("user.signingOut") : t("user.signOut")}</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 type PaletteEntry = { id: string; label: string; hint?: string; href: string; icon: typeof Film; generation?: GenerationSummary };
 
@@ -432,13 +275,17 @@ const WORKFLOW_SHORTCUTS = [
   { id: "trailer", icon: Play },
 ] as const;
 
+const NO_GENERATIONS: GenerationSummary[] = [];
+
 function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const t = useTranslations("shell");
   const tHome = useTranslations("home");
   const locale = useLocale();
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [generations, setGenerations] = useState<GenerationSummary[]>([]);
+  const { data: session } = useSession();
+  // Disabled while closed; opening the palette refetches the list.
+  const generations: GenerationSummary[] = useGenerations(open ? session?.user?.id : undefined).data ?? NO_GENERATIONS;
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -446,7 +293,6 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
     if (!open) return;
     setQuery("");
     setActive(0);
-    void fetchGenerations().then(setGenerations).catch(() => {});
   }, [open]);
 
   const socialAccess = useSocialAccess(open);
@@ -463,6 +309,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
       ...(socialAccess === true ? [{ id: "social", label: t("palette.social"), hint: t("palette.socialHint"), href: "/settings/social", icon: Share2 },
       { id: "analytics", label: t("nav.analytics"), hint: t("palette.analyticsHint"), href: "/analytics", icon: ChartColumn }] : []),
       { id: "keys", label: t("nav.agents"), hint: t("palette.agentsHint"), href: "/settings/api-keys", icon: Bot },
+      { id: "team", label: t("palette.team"), hint: t("palette.teamHint"), href: "/settings/team", icon: Users },
       { id: "settings", label: t("nav.settings"), href: "/settings", icon: Settings },
     ].filter((entry) => !q || entry.label.toLowerCase().includes(q));
     const matches = generations

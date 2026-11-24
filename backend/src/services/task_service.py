@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from subprocess import SubprocessError
 from typing import Dict, Any, Optional, Callable
+import math
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ import asyncio
 import copy
 import json
 import hashlib
+import shutil
 from time import perf_counter
 
 
@@ -47,6 +49,7 @@ from .task_completion_email_service import (
 from ..config import Config, get_config
 from ..youtube_utils import cleanup_downloaded_files, extract_video_id
 from ..youtube_proxy import YouTubeGeoRestrictedError, is_age_restricted_error
+from ..source_range import SourceRange, media_duration, public_range_fields
 from ..youtube_source import load_time_map, localize_segment, restore_clip_timeline, transcript_source_for
 from ..clip_cleanup import normalize_clip_cleanup_settings
 from ..clip_duration import clip_duration, validate_clip_length
@@ -60,6 +63,8 @@ from ..media_storage import MediaStorage, media_work
 from ..utils.async_helpers import run_in_thread
 from ..repositories.media_repository import queue_delete, guard_source_creation
 from ..stream_source import cleanup_stream_path, cleanup_stream_task, seed_stream_resolution
+from ..edit_fx.jobs import FxJob, fx_active
+from ..edit_fx.settings import read_edit_style
 
 logger = logging.getLogger(__name__)
 PROCESSING_CACHE_VERSION = "20260319_grounded_segments_v1"
@@ -168,7 +173,11 @@ class TaskService(ClipEditingMixin):
 
     @staticmethod
     def _build_cache_key(
-        url: str, source_type: str, processing_mode: str, quality: Optional[str] = None
+        url: str,
+        source_type: str,
+        processing_mode: str,
+        quality: Optional[str] = None,
+        source_range: Optional[SourceRange] = None,
     ) -> str:
         payload = (
             f"{source_type}|{processing_mode}|"
@@ -178,6 +187,9 @@ class TaskService(ClipEditingMixin):
         # request never reuses a 720p source. Full quality keeps the old key.
         if quality and source_type == "youtube":
             payload += f"|q{quality}"
+        # A picked part has its own transcript; the whole video's key is unchanged.
+        if source_range is not None:
+            payload += source_range.cache_suffix()
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -222,11 +234,19 @@ class TaskService(ClipEditingMixin):
         payload = f"{cache_key}|{OUTLINE_VERSION}|{config.llm}|{config.rerank_llm}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    async def _media_limits(self, user_id: Optional[str]) -> tuple[Optional[str], Optional[int]]:
-        """(download quality, clip cap) for the user's plan; see reduced_media_limits."""
-        if not user_id:
+    async def _media_limits(
+        self, user_id: Optional[str], *, team_id: Optional[str] = None
+    ) -> tuple[Optional[str], Optional[int]]:
+        """(download quality, clip cap) for the workspace's plan; see reduced_media_limits."""
+        if not user_id and not team_id:
             return None, None
-        summary = await BillingService(self.db, self.config).get_usage_summary(user_id)
+        summary = (
+            await BillingService(self.db, self.config).get_usage_summary(
+                user_id or "", team_id=team_id
+            )
+            if team_id
+            else await BillingService(self.db, self.config).get_usage_summary(user_id or "")
+        )
         return reduced_media_limits(summary)
 
     def _is_stale_queued_task(self, task: Dict[str, Any]) -> bool:
@@ -293,7 +313,7 @@ class TaskService(ClipEditingMixin):
 
     @staticmethod
     def _cleanup_source_video(
-        video_path: Optional[Path], source_type: str, url: str
+        video_path: Optional[Path], source_type: str, url: str, range_dir: Optional[str] = None,
     ) -> None:
         """Delete the downloaded source video + audio sidecar after a task.
 
@@ -302,6 +322,9 @@ class TaskService(ClipEditingMixin):
         media and partials but retains word timings. For uploads we remove the audio sidecar
         generated for transcription — the original upload is owned elsewhere.
         """
+        if range_dir:
+            # The picked part's audio and links; its timings never become the video's.
+            shutil.rmtree(range_dir, ignore_errors=True)
         if not video_path:
             return
 
@@ -310,9 +333,10 @@ class TaskService(ClipEditingMixin):
                 video_id = extract_video_id(url)
                 if video_id:
                     try:
-                        MediaStorage().save_youtube_metadata(
-                            video_id, transcript_source_for(video_id, video_path)
-                        )
+                        if not range_dir:
+                            MediaStorage().save_youtube_metadata(
+                                video_id, transcript_source_for(video_id, video_path)
+                            )
                     except Exception:
                         logger.exception("Could not back up YouTube word timings")
                     cleanup_downloaded_files(video_id, source_path=video_path)
@@ -358,7 +382,9 @@ class TaskService(ClipEditingMixin):
         upload_request_key: Optional[str] = None,
         workflow: str = "highlights",
         workflow_options: Optional[Dict[str, Any]] = None,
+        edit_style: Optional[Dict[str, Any]] = None,
         idempotency: Optional[tuple[str, str]] = None,
+        team_id: Optional[str] = None,
     ) -> str:
         """
         Create a new task with associated source.
@@ -375,7 +401,7 @@ class TaskService(ClipEditingMixin):
 
         if upload_request_key and url.startswith("upload://"):
             existing = await self.task_repo.find_recent_upload_task(
-                self.db, user_id, upload_request_key,
+                self.db, user_id, upload_request_key, team_id=team_id,
             )
             if existing is not None:
                 self.reused_upload_task = True
@@ -423,7 +449,9 @@ class TaskService(ClipEditingMixin):
                 charge_minutes=self.config.monetization_enabled,
                 workflow=workflow,
                 workflow_options=workflow_options,
+                **({"edit_style": edit_style} if edit_style else {}),
                 **({"idempotency": idempotency} if idempotency else {}),
+                **({"team_id": team_id} if team_id else {}),
             )
         except TaskIdempotencyReplay:
             # The task insert rolled back. Drop the source made for it.
@@ -442,8 +470,14 @@ class TaskService(ClipEditingMixin):
         logger.info(f"Created task {task_id} for user {user_id}")
         return task_id
 
-    async def _load_performance_context(self, user_id: Optional[str]) -> Optional[str]:
-        """Build the creator's performance summary for the AI prompt (best effort)."""
+    async def _load_performance_context(
+        self, user_id: Optional[str], *, team_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Build the workspace's performance summary for the AI prompt (best effort).
+
+        A team task learns from the team's posts, never from the personal
+        accounts of the member who started it.
+        """
         if not user_id:
             return None
         try:
@@ -455,7 +489,7 @@ class TaskService(ClipEditingMixin):
             # leave the task's transaction aborted.
             async with AsyncSessionLocal() as session:
                 return await SocialService(session, self.config).build_performance_context(
-                    user_id
+                    user_id, **({"team_id": team_id} if team_id else {})
                 )
         except Exception as exc:  # never block processing
             logger.warning("Skipping performance context for user %s: %s", user_id, exc)
@@ -476,7 +510,8 @@ class TaskService(ClipEditingMixin):
                 seed_stream_resolution,
                 task_id,
                 metadata.get("stream_resolution"),
-                task.get("source_duration_seconds"),
+                # For a picked part the charged length is the part; seed the VOD's.
+                media_duration(task, metadata),
             )
         except Exception as exc:  # the worker can still resolve everything itself
             logger.warning("Could not seed stream source details: %s", exc)
@@ -510,6 +545,7 @@ class TaskService(ClipEditingMixin):
         # success and error paths; multi-GB YouTube downloads otherwise pile up
         # in temp/ until the disk fills and later tasks fail.
         video_path: Optional[Path] = None
+        range_dir: Optional[str] = None
         pending_clip_path: Optional[Path] = None
         clips_output_dir = Path(self.config.temp_dir) / "clips"
         spec: Optional[WorkflowSpec] = None
@@ -530,27 +566,42 @@ class TaskService(ClipEditingMixin):
             # What to make is read from the task, so queued jobs and resumes
             # honour it with the ARQ job arguments unchanged.
             task_row = await self.task_repo.get_task_by_id(self.db, task_id) or {}
+            task_team_id = task_row.get("team_id")
             spec = workflow_spec_from_task(task_row, clip_length)
             prior_outputs = bool(await self.clip_repo.get_clips_by_task(self.db, task_id))
             # New tasks already have an atomic acceptance charge. Recover queued
             # legacy jobs with missing durations before doing paid processing.
             if self.config.monetization_enabled and user_id:
-                async with generation_allowance_guard(self.db, user_id, enabled=True):
+                async with generation_allowance_guard(
+                    self.db,
+                    user_id,
+                    enabled=True,
+                    **({"team_id": task_team_id} if task_team_id else {}),
+                ):
                     await BillingService(self.db, self.config).assert_can_resume_task(
-                        user_id, task_id, require_active_plan=False
+                        user_id,
+                        task_id,
+                        require_active_plan=False,
+                        **({"team_id": task_team_id} if task_team_id else {}),
                     )
             started_at = datetime.utcnow()
             stage_timings: Dict[str, float] = {}
             billing = (
-                await BillingService(self.db, self.config).get_usage_summary(user_id)
+                await BillingService(self.db, self.config).get_usage_summary(
+                    user_id,
+                    **({"team_id": task_team_id} if task_team_id else {}),
+                )
                 if user_id
                 else {}
             )
             # Reduced-resolution plans download at their output quality and get
             # a final downscale; 1080p plans keep the renderer's output.
             download_quality, output_short_side = reduced_media_limits(billing)
+            source_range = SourceRange.from_metadata(
+                await self.task_repo.load_source_metadata(self.db, task_id)
+            )
             cache_key = self._build_cache_key(
-                url, source_type, processing_mode, download_quality
+                url, source_type, processing_mode, download_quality, source_range
             )
             if spec.legacy:
                 analysis_cache_key = self._build_analysis_cache_key(cache_key, clip_length)
@@ -579,13 +630,22 @@ class TaskService(ClipEditingMixin):
             # cache so one creator's history never shapes another's clips.
             # Series, recaps and trailers follow the video, not past metrics.
             performance_context = (
-                await self._load_performance_context(user_id)
+                await self._load_performance_context(
+                    user_id, **({"team_id": task_team_id} if task_team_id else {})
+                )
                 if spec.uses_performance_context
                 else None
             )
-            if performance_context:
+            # A picked part's stored analysis holds segments already moved onto
+            # the source's timeline, so it is never read back or shared.
+            skip_analysis_cache = bool(performance_context) or source_range is not None
+            if skip_analysis_cache:
                 cached_analysis_json = None
             input_key = checkpoint_input_key(url, source_type, processing_mode, clip_length, self.config)
+            if source_range is not None:
+                input_key = hashlib.sha256(
+                    f"{input_key}{source_range.cache_suffix()}".encode("utf-8")
+                ).hexdigest()
             checkpoint = await self.checkpoint_repo.get(self.db, task_id, input_key)
             cache_hit = bool(
                 (checkpoint.get("transcript") or cached_transcript)
@@ -639,13 +699,17 @@ class TaskService(ClipEditingMixin):
                     await progress_callback(progress, message, status)
 
             # Process video with progress updates
-            max_video_duration = self.config.max_video_duration
-            if source_type in {"youtube", "twitch", "kick"} and user_id:
-                max_video_duration = self.config.max_youtube_video_duration_for_plan(
-                    billing.get("plan"),
-                    billing.get("subscription_status"),
-                    billing.get("subscription_provider"),
-                )
+            # The plan's per-video cap applies to every source, uploads included
+            # (hosted mode only; self-hosted installs have no video length limit).
+            max_video_duration: Optional[int] = None
+            if self.config.monetization_enabled:
+                max_video_duration = self.config.max_video_duration
+                if user_id:
+                    max_video_duration = self.config.max_youtube_video_duration_for_plan(
+                        billing.get("plan"),
+                        billing.get("subscription_status"),
+                        billing.get("subscription_provider"),
+                    )
 
             if source_type in {"twitch", "kick"}:
                 await self._seed_stream_source(task_id)
@@ -687,7 +751,9 @@ class TaskService(ClipEditingMixin):
                 checkpoint=checkpoint,
                 checkpoint_callback=save_checkpoint,
                 **workflow_kwargs,
+                **({"source_range": source_range} if source_range is not None else {}),
             )
+            range_dir = result.get("source_range_dir")
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3
             )
@@ -725,11 +791,11 @@ class TaskService(ClipEditingMixin):
                 transcript_text=result.get("transcript"),
                 analysis_json=(
                     result.get("analysis_json")
-                    if not performance_context and analysis_cache_key == cache_key
+                    if not skip_analysis_cache and analysis_cache_key == cache_key
                     else None
                 ),
             )
-            if not performance_context and analysis_cache_key != cache_key:
+            if not skip_analysis_cache and analysis_cache_key != cache_key:
                 await self.cache_repo.upsert_cache(
                     self.db,
                     cache_key=analysis_cache_key,
@@ -776,6 +842,19 @@ class TaskService(ClipEditingMixin):
             render_start = perf_counter()
             # Read from the task so queued jobs and resumes honour the setting.
             include_broll = bool(task_row.get("include_broll"))
+            # Dynamic edits: read from the row (create stores it; resumes and retries keep it).
+            edit_style = read_edit_style(task_row.get("edit_style"))
+            fx_on = fx_active(edit_style, caption_template)
+            if fx_on and user_id:
+                from ..observability import set_user_id
+
+                set_user_id(user_id)
+
+            async def _merge_beats(position: int, beats: Dict[str, Any]) -> None:
+                # Re-read so one clip's beats never replace another's (the checkpoint patch is a top-level replace).
+                merged = dict(checkpoint.get("edit_beats") or {})
+                merged[str(position)] = beats
+                await save_checkpoint({"edit_beats": merged})
             broll_session = BRollSession()
             wants_previews: Optional[bool] = None  # checked once a clip renders
             # (virality, render order, still) for each saved clip.
@@ -809,6 +888,18 @@ class TaskService(ClipEditingMixin):
                 )
 
                 async def render_clip():
+                    # Built per attempt: a retry reads the beats the first attempt checkpointed (no second model call).
+                    job = (
+                        FxJob(
+                            style=edit_style,
+                            task_id=task_id,
+                            clip_index=i,
+                            cached_beats=(checkpoint.get("edit_beats") or {}).get(str(i)),
+                            on_beats=_merge_beats,
+                        )
+                        if fx_on
+                        else None
+                    )
                     return await self.video_service.create_single_clip(
                         video_path,
                         render_segment,
@@ -825,6 +916,7 @@ class TaskService(ClipEditingMixin):
                         max_clip_seconds=max_clip_seconds,
                         include_broll=include_broll,
                         broll_session=broll_session,
+                        **({"fx": job} if job else {}),
                     )
 
                 clip_info = await render_clip()
@@ -857,6 +949,12 @@ class TaskService(ClipEditingMixin):
                         restore_clip_timeline, clip_info, time_map, segment
                     )
                 workflow_fields: Dict[str, Any] = {}
+                if segment.get("hook_type") == "fallback":
+                    # The segment spans the stretch the render looked in; the labels show what the clip plays.
+                    played = source_range_bounds(normalize_source_ranges(clip_info.get("keep_ranges")))
+                    if played:
+                        clip_info["start_time"] = seconds_to_mmss(math.floor(played[0]))
+                        clip_info["end_time"] = seconds_to_mmss(math.floor(played[1]))
                 if segment.get("planned"):
                     # Labels show the source span the clip plays, on the original timeline.
                     bounds = source_range_bounds(normalize_source_ranges(segment.get("source_ranges")))
@@ -898,6 +996,7 @@ class TaskService(ClipEditingMixin):
                         hook_type=clip_info.get("hook_type"),
                         hook_title=clip_info.get("hook_title"),
                         **workflow_fields,
+                        **({"fx_meta": clip_info["fx_meta"]} if clip_info.get("fx_meta") else {}),
                     )
 
                     # Update task's clip IDs array
@@ -1097,7 +1196,10 @@ class TaskService(ClipEditingMixin):
                     logger.exception("Could not publish task failure for %s", task_id)
             raise
         finally:
-            await run_in_thread(self._cleanup_source_video, video_path, source_type, url)
+            await run_in_thread(
+                self._cleanup_source_video, video_path, source_type, url,
+                **({"range_dir": range_dir} if range_dir else {}),
+            )
             if source_type in {"twitch", "kick"}:
                 # Also handles failures before process_video_complete returns a
                 # path (and therefore before the generic path cleanup can run).
@@ -1272,15 +1374,22 @@ class TaskService(ClipEditingMixin):
             for clip in clips
         ]
         task["clips_count"] = len(clips)
-        task.update(await self._load_task_source_settings(task_id))
+        settings = await self._load_task_source_settings(task_id)
+        # The picked part (null for a whole video): clip times are on the source's
+        # timeline, so these only label the task and bound its links.
+        task.update(public_range_fields(settings))
+        settings.pop("source_range", None)
+        task.update(settings)
 
         return task
 
     async def get_user_tasks(
-        self, user_id: str, limit: int = 50
+        self, user_id: str, limit: int = 50, *, team_id: Optional[str] = None
     ) -> list[Dict[str, Any]]:
-        """Get all tasks for a user."""
-        return await self.task_repo.get_user_tasks(self.db, user_id, limit)
+        """Get all tasks for a user or team workspace."""
+        return await self.task_repo.get_user_tasks(
+            self.db, user_id, limit, team_id=team_id
+        )
 
     @serialized_task_edit
     async def delete_task(self, task_id: str) -> None:

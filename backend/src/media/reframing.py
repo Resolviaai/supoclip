@@ -4,6 +4,7 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Sequence
 from pathlib import Path
 from typing import Tuple
 import cv2
@@ -781,6 +782,67 @@ def _scene_cuts_from_diffs(diffs: List[Tuple[float, float]]) -> List[float]:
     return cuts
 
 
+# A scene change into (or out of) busy footage. The spike tests above and in ``context_scene_cuts`` need a cut to
+# stand out from the changes around it; a cut from a calm scene to handheld footage is followed by changes almost
+# as large, and a clip with many such changes raises its own threshold. But the scene looks different: the
+# picture's overall colour shifts in one step and stays shifted. Measured on a cut from a night street to a lit
+# room: step 52, the next three steps 35 to 42, colour shift 60; a pan inside one scene shifts it by under 10.
+LOOK_CUT_SAMPLES = 3          # samples averaged either side of the step (one second at the analysis rate)
+LOOK_CUT_MIN_STEP = 24.0      # mean change at the step itself, as for the other cut tests
+LOOK_CUT_MIN_SHIFT = 25.0     # change of the mean colour across the step (0-255, the channel that moves most)
+LOOK_CUT_REACH = 2            # the step is the largest within this many samples
+# On its own the test also fires inside one shot (an explosion, lights going on, a fast pan from shade into sun):
+# a third of its finds on reviewed clips had no cut. So each find is checked at the full frame rate, where a hard
+# cut is one frame-to-frame change and motion is not (``interview_layout.precise_cuts``). That pass is only
+# decoded when the test found something the other tests did not.
+LOOK_CUT_SAME = 0.4           # seconds: a find this close to a cut already known adds nothing
+LOOK_CUT_FRAME_REACH = (0.45, 0.1)   # a sampled cut lies up to one sample before its time; seconds before, after
+LOOK_CUT_MAX_RATE = 1.5       # frame-accurate cuts per second above which that detector is not trusted (judder)
+
+
+def _scene_cuts_from_look(times: Sequence[float], thumbs: Sequence[np.ndarray]) -> List[float]:
+    """Cuts where the picture's overall colour changes in one step and stays changed (see LOOK_CUT_*)."""
+    count = min(len(times), len(thumbs))
+    if count < 2 * LOOK_CUT_SAMPLES:
+        return []
+    frames = np.stack([np.asarray(t, dtype=np.float32) for t in thumbs[:count]])
+    steps = np.abs(np.diff(frames, axis=0)).reshape(count - 1, -1).mean(axis=1)   # steps[i - 1]: frame i-1 to i
+    tones = frames.reshape(count, -1, frames.shape[-1]).mean(axis=1)               # mean colour per frame
+    cuts: List[float] = []
+    for i in range(LOOK_CUT_SAMPLES, count - LOOK_CUT_SAMPLES + 1):
+        step = float(steps[i - 1])
+        if step < LOOK_CUT_MIN_STEP:
+            continue
+        around = steps[max(0, i - 1 - LOOK_CUT_REACH):i + LOOK_CUT_REACH]
+        if step < float(around.max()):
+            continue
+        # The median of each side: one flash frame does not move it.
+        before = np.median(tones[i - LOOK_CUT_SAMPLES:i], axis=0)
+        after = np.median(tones[i:i + LOOK_CUT_SAMPLES], axis=0)
+        if float(np.abs(after - before).max()) >= LOOK_CUT_MIN_SHIFT:
+            cuts.append(float(times[i]))
+    return cuts
+
+
+def _look_cuts_on_real_cuts(input_path: Path, finds: Sequence[float], duration: float) -> List[float]:
+    """The look test's finds that sit on a frame-accurate hard cut. None when that cannot be checked."""
+    if not finds:
+        return []
+    from .interview_layout import frame_changes, precise_cuts
+
+    try:
+        times, thumbnails = frame_changes(input_path)
+        hard = precise_cuts(times, thumbnails, [])
+    except Exception as exc:  # noqa: BLE001 - the cuts already known stand
+        logger.warning("Frame-accurate check of scene changes failed (%s); keeping the sampled cuts", exc)
+        return []
+    if len(hard) > LOOK_CUT_MAX_RATE * max(duration, 1.0):
+        # Footage with repeated frames (judder) reads as a cut every few frames: nothing can be confirmed on it.
+        return []
+    before, after = LOOK_CUT_FRAME_REACH
+    return [c for c in finds if any(-before <= h - c <= after for h in hard)]
+
+
 def analyze_vertical_clip(
     input_path: Path,
     *,
@@ -834,6 +896,8 @@ def analyze_vertical_clip(
     track: List[Tuple[float, Optional[float], float]] = []
     face_samples: List[Tuple[float, List[Tuple[float, float, float, float]]]] = []
     diffs: List[Tuple[float, float]] = []
+    thumbs: List[np.ndarray] = []
+    thumb_times: List[float] = []
     context_analyzer = ContextAnalyzer() if analyze_context else None
     context: List[SceneEvidence] = []
     prev_small = None
@@ -867,6 +931,8 @@ def analyze_vertical_clip(
             if prev_small is not None:
                 diffs.append((t, float(np.mean(np.abs(small - prev_small)))))
             prev_small = small
+            thumbs.append(small)
+            thumb_times.append(t)
             idx += 1
     finally:
         try:
@@ -880,6 +946,15 @@ def analyze_vertical_clip(
     if proc.returncode != 0:
         raise RuntimeError("Video analysis decoder failed; partial analysis discarded")
     cuts = sorted(set(_scene_cuts_from_diffs(diffs)) | set(context_scene_cuts(context)))
+    finds = [
+        c for c in _scene_cuts_from_look(thumb_times, thumbs)
+        if not any(abs(c - known) < LOOK_CUT_SAME for known in cuts)
+    ]
+    if finds:
+        confirmed = _look_cuts_on_real_cuts(input_path, finds, idx / sample_fps)
+        if confirmed:
+            logger.info("Scene changes into busy footage: %s", [round(c, 2) for c in confirmed])
+            cuts = sorted(set(cuts) | set(confirmed))
     return track, cuts, face_samples, context
 
 
@@ -1305,6 +1380,17 @@ def plan_fit_windows(
     return windows
 
 
+def cover_windows(plan: List[Dict[str, Any]], width: int, crop_w: int) -> List[FitWindow]:
+    """Full-height 9:16 crops (start, end, crop_w, x) for the plan's ``cover`` shots, centred on their ``x``."""
+    if crop_w >= width:
+        return []
+    return [
+        (shot["start"], shot["end"], crop_w,
+         clamp_even(int(float(shot["x"]) * width - crop_w / 2), 0, width - crop_w))
+        for shot in plan if shot["kind"] == "cover"
+    ]
+
+
 def build_fit_layers(
     fit_intervals: List[Tuple[float, float]],
     windows: Optional[List[FitWindow]] = None,
@@ -1444,6 +1530,7 @@ def build_vertical_filter_plan(
     speaker_turns: Optional[List[Dict[str, Any]]] = None,
     speaker_words: Optional[List[Dict[str, Any]]] = None,
     report: Optional[Dict[str, Any]] = None,
+    allow_kenburns: bool = True,
 ) -> Tuple[str, str, Optional[float]]:
     """Build the 9:16 reframing filter for the default vertical mode.
 
@@ -1451,14 +1538,31 @@ def build_vertical_filter_plan(
     'complex' is a filter_complex producing [vout]. caption_y is a 0-1 output
     fraction that keeps captions off the detected face, or None to keep the
     template default. ``report["kind"]`` receives the layout kind.
+
+    ``allow_kenburns=False`` (the dynamic-edits render path) leaves the slow
+    punch-in out of the plan: fx-core draws an editable push instead, so a clip
+    has exactly one zoom source. ``report["kenburns_eligible"]`` then says
+    whether the legacy plan would have used it.
     """
     described = describe_vertical_layout(
-        input_path, width, height, speaker_turns, speaker_words
+        input_path, width, height, speaker_turns, speaker_words,
+        **({} if allow_kenburns else {"allow_kenburns": False}),
     )
     if report is not None:
         report["kind"] = described["kind"]
+        if "kenburns_eligible" in described:
+            report["kenburns_eligible"] = described["kenburns_eligible"]
         if described.get("hook_center_y") is not None:
             report["hook_center_y"] = described["hook_center_y"]
+        if described.get("panel_windows"):
+            report["panel_windows"] = described["panel_windows"]
+        if described.get("interview_segments"):
+            # Per-shot kinds (pair / single / fit, stage-1 seconds): the dynamic-edits caption rows, and the studio's.
+            report["interview_segments"] = described["interview_segments"]
+        if described.get("gaming"):
+            report["gaming"] = described["gaming"]
+        if described.get("letterbox"):
+            report["letterbox"] = described["letterbox"]
     return described["video_filter"], described["mode"], described["caption_y"]
 
 
@@ -1468,19 +1572,68 @@ def describe_vertical_layout(
     height: int,
     speaker_turns: Optional[List[Dict[str, Any]]] = None,
     speaker_words: Optional[List[Dict[str, Any]]] = None,
+    allow_kenburns: bool = True,
+) -> Dict[str, Any]:
+    """The clip's 9:16 plan (``_describe_vertical_layout``), made on the picture without its black bars.
+
+    A source with a film look carries black bars at the top and bottom of every frame. They are measured
+    (``letterbox.detect_letterbox``), the layout is planned on the picture between them, and the plan
+    starts with the crop that removes them, so it applies to the uncropped clip and the studio can replay
+    it. ``letterbox`` in the result holds the (top, bottom) rows removed. A clip without bars, or one
+    whose bars cannot be measured, is planned as it is.
+    """
+    from .letterbox import cropped_copy, detect_letterbox, plan_on_picture
+
+    kenburns = {} if allow_kenburns else {"allow_kenburns": False}
+    try:
+        bars = detect_letterbox(input_path, width, height)
+    except Exception as exc:  # noqa: BLE001 - the clip is planned with its bars
+        logger.warning("Letterbox check failed (%s); planning the whole frame", exc)
+        bars = None
+    if not bars:
+        return _describe_vertical_layout(input_path, width, height, speaker_turns, speaker_words, **kenburns)
+    top, bottom = bars
+    picture_h = height - top - bottom
+    with tempfile.TemporaryDirectory(prefix="supoclip_letterbox_") as scratch:
+        picture = Path(scratch) / "picture.mp4"
+        if not cropped_copy(input_path, picture, width, picture_h, top):
+            return _describe_vertical_layout(input_path, width, height, speaker_turns, speaker_words, **kenburns)
+        described = dict(_describe_vertical_layout(picture, width, picture_h, speaker_turns, speaker_words, **kenburns))
+    if described.get("kind") == "gaming":
+        # A game's own subtitles can sit in a bar, and the gameplay layout leaves captions off for the
+        # lines they carry. Cutting the bar would leave those lines with neither.
+        return _describe_vertical_layout(input_path, width, height, speaker_turns, speaker_words, **kenburns)
+    described["video_filter"] = plan_on_picture(described["video_filter"], described["mode"], width, picture_h, top)
+    described["letterbox"] = [top, bottom]
+    logger.info("Letterbox bars removed before layout: %d px top, %d px bottom", top, bottom)
+    return described
+
+
+def _describe_vertical_layout(
+    input_path: Path,
+    width: int,
+    height: int,
+    speaker_turns: Optional[List[Dict[str, Any]]] = None,
+    speaker_words: Optional[List[Dict[str, Any]]] = None,
+    allow_kenburns: bool = True,
 ) -> Dict[str, Any]:
     """Same plan as ``build_vertical_filter_plan``, plus a layout ``kind``.
+
+    With ``allow_kenburns=False`` the two Ken Burns sites keep the plain chain
+    and the result gains ``kenburns_eligible`` (True where the punch-in would
+    have been used). The default leaves the plan and its keys unchanged.
 
     Kinds the editor keeps whole are ``reaction`` (reactor above the source),
     ``stack`` (side-by-side call tiles), ``overlap`` (two speakers at once)
     and ``interview`` (per shot: two people stacked, one cropped tight, or
     the full frame; see ``interview_layout``).
-    ``crop``, ``speaker``, ``stage``, ``fit`` and ``compositor`` stay on the
-    editor's vertical or original crop.
+    ``crop``, ``speaker``, ``solo``, ``stage``, ``fit`` and ``compositor``
+    stay on the editor's vertical or original crop.
 
     All-face clips use a face-aware layout when the subject would otherwise
-    sit low in a full-height crop (stacked call tiles, a wider stage for one
-    webcam, or the whole gallery). Well-framed closeups keep the tracked crop.
+    sit low in a full-height crop (stacked call tiles, a tight crop on one
+    person, a wider stage for a small webcam face, or the whole gallery).
+    Well-framed closeups keep the tracked crop.
     Clips containing content shots use the scene-aware compositor so tweets /
     graphs / slides are shown in full. With diarized speaker turns, multi-person
     wide shots that are not a video-call grid cut to whoever is talking.
@@ -1494,6 +1647,13 @@ def describe_vertical_layout(
     crop_w, crop_h = compute_vertical_crop_dims(width, height)
     duration = ffprobe_duration(input_path)
 
+    def described(kind: str, video_filter: str, mode: str, caption_y: Optional[float],
+                  eligible: bool = False) -> Dict[str, Any]:
+        result = _described(kind, video_filter, mode, caption_y)
+        if not allow_kenburns:
+            result["kenburns_eligible"] = eligible
+        return result
+
     def bleed_caption(samples) -> Optional[float]:
         bottom = dominant_face_bottom(samples, height)
         if bottom is None:
@@ -1505,8 +1665,25 @@ def describe_vertical_layout(
     # slow punch-in so the frame still breathes.
     if crop_w >= width:
         sx, sy, sw, sh = detect_optimal_crop_region(input_path, 0, min(duration, 12.0))
-        tail = kenburns_zoom_fragment(duration) or VERTICAL_SCALE_CHAIN
+        zoom = kenburns_zoom_fragment(duration)
+        if not allow_kenburns:
+            return described(
+                "crop", f"crop={sw}:{sh}:{sx}:{sy},{VERTICAL_SCALE_CHAIN}", "vf", None, zoom is not None
+            )
+        tail = zoom or VERTICAL_SCALE_CHAIN
         return _described("crop", f"crop={sw}:{sh}:{sx}:{sy},{tail}", "vf", None)
+
+    # --- Gaming mode (GAMING_LAYOUT=auto; off by default): media/gaming_layout.py, docs/gaming-mode.md ---
+    from .gaming_layout import choose_gaming_layout
+
+    gaming = choose_gaming_layout(input_path, width, height, duration)
+    if gaming:
+        result = described("gaming", gaming["video_filter"], "complex", gaming["caption_y"])
+        if gaming.get("hook_center_y") is not None:
+            result["hook_center_y"] = gaming["hook_center_y"]
+        result["gaming"] = gaming["gaming"]
+        return result
+    # --- end gaming mode ---
 
     # One fast decode pass yields the face track, face boxes, and scene cuts.
     try:
@@ -1527,15 +1704,32 @@ def describe_vertical_layout(
     except Exception as exc:
         logger.warning("Readable fit planning failed (%s); keeping the plain fit", exc)
         fit_windows = []
+    covers = cover_windows(plan, width, crop_w)
+    if covers:
+        # Live footage fills the frame: a full-height crop, drawn by the same fit layers as a readable zoom.
+        fit_windows = sorted((fit_windows or [
+            (s["start"], s["end"], None, 0) for s in plan if s["kind"] == "fit"
+        ]) + covers)
     if fit_windows:
         logger.info("Readable fit windows (start, end, crop_w, x): %s", fit_windows)
-    fit_intervals = [(s["start"], s["end"]) for s in plan if s["kind"] == "fit"]
+    fit_intervals = [(s["start"], s["end"]) for s in plan if s["kind"] in ("fit", "cover")]
+
+    def with_shots(result: Dict[str, Any]) -> Dict[str, Any]:
+        # A clip that switches between frame-filling crops and fitted content gets its shots, in the interview
+        # layout's terms (crop or cover = "single", fit = "fit"), so the look captions sit at mid-chest on a crop
+        # and below the picture of a fitted graphic instead of across it (edit_fx.caption_rows).
+        if any(s["kind"] == "fit" for s in plan) and any(s["kind"] != "fit" for s in plan):
+            result["interview_segments"] = [
+                {"start": float(s["start"]), "end": float(s["end"]), "kind": "fit" if s["kind"] == "fit" else "single"}
+                for s in plan
+            ]
+        return result
     # Two people who cannot share a 9:16 crop are not slide or sports content.
     # Call/stage layouts and speaker framing still apply; if both decline, that
     # shot keeps the full frame instead of a dominant-face crop.
     content_fits = [
         shot for shot in plan
-        if shot["kind"] == "fit" and shot.get("reason") != "interaction_exceeds_crop"
+        if shot["kind"] in ("fit", "cover") and shot.get("reason") != "interaction_exceeds_crop"
     ]
 
     # A persistent reaction inset is independent of fit intervals, camera cuts,
@@ -1569,7 +1763,7 @@ def describe_vertical_layout(
     )
     if reaction:
         logger.info("Reaction layout: inset %s, %d source sections", reaction['inset'], len(reaction['source_runs']))
-        return _described("reaction", reaction["video_filter"], "complex", reaction["caption_y"])
+        return described("reaction", reaction["video_filter"], "complex", reaction["caption_y"])
 
     # A sit-down interview (a two-shot, usually cut with close-ups) is composed
     # shot by shot: both people stacked, one person cropped tight, graphics
@@ -1583,21 +1777,31 @@ def describe_vertical_layout(
         logger.warning("Interview layout failed (%s); using the generic layout", exc)
         interview = None
     if interview:
-        result = _described(
+        result = described(
             "interview", interview["video_filter"], "complex",
             caption_y_below_subject(interview["face_bottom"]),
         )
         if interview.get("hook_center_y") is not None:
             result["hook_center_y"] = interview["hook_center_y"]
+        pairs = [(s["start"], s["end"]) for s in interview.get("segments", ()) if s["kind"] == "pair"]
+        if pairs:
+            result["panel_windows"] = pairs
+        if interview.get("segments"):
+            result["interview_segments"] = [dict(s) for s in interview["segments"]]
         return result
 
-    if all(s["kind"] == "fit" for s in plan) and content_fits:
-        return _described("fit", build_full_frame_filter(fit_windows=fit_windows), "complex", 0.80)
+    if all(s["kind"] in ("fit", "cover") for s in plan) and content_fits:
+        if all(s["kind"] == "cover" for s in plan):
+            return described("crop", build_full_frame_filter(fit_windows=fit_windows), "complex", None)
+        if covers:
+            return with_shots(described(
+                "compositor", build_full_frame_filter(fit_windows=fit_windows), "complex", 0.80))
+        return described("fit", build_full_frame_filter(fit_windows=fit_windows), "complex", 0.80)
 
     # choose_talking_head_layout already refuses cut-heavy clips (more than
     # four cuts). One jump cut must not drop stage, stack, or gallery layouts.
     talking = (
-        choose_talking_head_layout(width, height, face_samples, scene_cuts)
+        choose_talking_head_layout(width, height, face_samples, scene_cuts, duration, input_path)
         if not content_fits else None
     )
     if not content_fits and speaker_words and (not talking or talking["kind"] == "stack"):
@@ -1621,17 +1825,17 @@ def describe_vertical_layout(
                 # like a call. Put captions between the two faces.
                 caption_y = 0.5 if speaker_mode == "complex" else bleed_caption(face_samples)
                 kind = "overlap" if speaker_mode == "complex" else "speaker"
-                return _described(kind, speaker_filter, speaker_mode, caption_y)
+                return described(kind, speaker_filter, speaker_mode, caption_y)
     if talking:
         logger.info(
             "Face-aware vertical layout: %s (upscale %.2fx, caption_y %.2f)",
             talking["kind"], talking["upscale"], talking["caption_y"],
         )
-        return _described(
+        return described(
             talking["kind"], talking["video_filter"], "complex", talking["caption_y"]
         )
     if all(s["kind"] == "fit" for s in plan):
-        return _described("fit", build_full_frame_filter(fit_windows=fit_windows), "complex", 0.80)
+        return described("fit", build_full_frame_filter(fit_windows=fit_windows), "complex", 0.80)
 
     keys = build_crop_trajectory(track, width, crop_w) if track else []
     # A cut by itself is not camera motion. Ken Burns stays available unless
@@ -1660,28 +1864,30 @@ def describe_vertical_layout(
         # already have motion, and zoompan's re-timing would fight overlays.)
         if not moving:
             zoom = kenburns_zoom_fragment(duration)
+            if not allow_kenburns:
+                return described("crop", crop_chain, "vf", bleed_caption(face_samples), zoom is not None)
             if zoom:
-                return _described(
+                return described(
                     "crop",
                     f"crop={crop_w}:{crop_h}:{static_x}:0,{zoom}",
                     "vf",
                     bleed_caption(face_samples),
                 )
-        return _described("crop", crop_chain, "vf", bleed_caption(face_samples))
+        return described("crop", crop_chain, "vf", bleed_caption(face_samples))
 
     face_intervals = [(s["start"], s["end"]) for s in plan if s["kind"] == "face"]
     logger.info(
         "Scene-aware vertical layout: %d face shot(s), %d content shot(s)",
         len(face_intervals), len(fit_intervals),
     )
-    return _described(
+    return with_shots(described(
         "compositor",
         build_vertical_compositor_filter(
             crop_chain, face_intervals, fit_intervals, fit_windows=fit_windows
         ),
         "complex",
         bleed_caption(face_samples),
-    )
+    ))
 
 
 def render_reframed_clip_ffmpeg(
@@ -1695,6 +1901,8 @@ def render_reframed_clip_ffmpeg(
     vertical_plan: Optional[Tuple[str, str]] = None,
     speaker_plan: Optional[Dict[str, Any]] = None,
     broll_overlays: Optional[List[Dict[str, Any]]] = None,
+    fx_request: Optional[Any] = None,
+    fx_report: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, int, int]:
     """Render the final framed clip and (optionally) burn subtitles in one pass.
 
@@ -1703,12 +1911,19 @@ def render_reframed_clip_ffmpeg(
     output and loudness-normalised audio. ``broll_overlays`` (path, start and
     duration on the clip timeline) are composited over the framed picture and
     under the captions.
+
+    ``fx_request`` (a ``media.fx_chain.FxRequest``) renders the clip through the
+    dynamic-edits chain instead: every branch goes through ``composited()``, whose
+    framing head (without subtitles) becomes the chain's P1 head and whose
+    encode args become P3's. ``fx_report`` carries the chain options in
+    (``mode``: "full" | "safe", ``should_cancel``) and the ``FxResult`` out
+    (``result``).
     """
     width, height = ffprobe_video_size(input_path)
     has_audio = ffprobe_has_audio(input_path)
     subs = (
         subtitles_filter_fragment(subtitle_ass_path, fonts_dir)
-        if subtitle_ass_path
+        if subtitle_ass_path and fx_request is None
         else None
     )
     audio_args = build_audio_output_args(has_audio)
@@ -1719,6 +1934,14 @@ def render_reframed_clip_ffmpeg(
     )
 
     def composited(head: str, head_label: str, out_w: int, out_h: int, tail: str = "", **encode) -> bool:
+        if fx_request is not None:
+            # P3 burns the ASS above the effects, so the head carries no subtitles
+            # (otherwise the hook title would also be burned under P2's zoom).
+            return _render_fx_chain(
+                input_path, output_path, head, head_label, out_w, out_h, overlays,
+                subtitle_ass_path, fonts_dir, fx_request, fx_report, tail=tail,
+                encode_args=build_final_video_encode_args(**encode), has_audio=has_audio,
+            )
         graph, label = broll_overlay_graph(head_label, overlays, out_w, out_h)
         post = ",".join(part for part in (subs, tail) if part)
         if post:
@@ -1745,7 +1968,7 @@ def render_reframed_clip_ffmpeg(
         needs_scale = (capped_width, capped_height) != (display_width, display_height)
         needs_fps = source_fps is not None and source_fps > MAX_OUTPUT_FPS + FPS_EPSILON
         out_w, out_h = round_to_even(capped_width), round_to_even(capped_height)
-        if overlays:
+        if overlays or fx_request is not None:
             # Always scale to the display size: on a non-square-pixel source
             # the coded frame is not the size the overlay is built for.
             ok = composited(
@@ -1811,7 +2034,7 @@ def render_reframed_clip_ffmpeg(
             f"scale=1080:960:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1[rv];"
             f"[lv][rv]vstack,setsar=1"
         )
-        if overlays:
+        if overlays or fx_request is not None:
             return composited(f"{stacked}[base]", "[base]", 1080, 1920), 1080, 1920
         video_filter = f"{stacked}{vstack_tail}[v]"
         command = [
@@ -1830,7 +2053,7 @@ def render_reframed_clip_ffmpeg(
             f"crop={plan['crop_w']}:{plan['crop_h']}:x='{plan['x_expression']}':y=0,"
             f"{VERTICAL_SCALE_CHAIN}"
         )
-        if overlays:
+        if overlays or fx_request is not None:
             return composited(f"[0:v]{video_filter}[base]", "[base]", 1080, 1920), 1080, 1920
         if subs:
             video_filter = f"{video_filter},{subs}"
@@ -1852,9 +2075,11 @@ def render_reframed_clip_ffmpeg(
         video_filter, mode = vertical_plan
     else:
         video_filter, mode, _caption_y = build_vertical_filter_plan(
-            input_path, width, height, speaker_turns, speaker_words
+            input_path, width, height, speaker_turns, speaker_words,
+            # The chain's analysis decodes the head at 6 fps: no zoompan on the FX path.
+            **({"allow_kenburns": False} if fx_request is not None else {}),
         )
-    if overlays:
+    if overlays or fx_request is not None:
         if mode == "complex":
             return composited(video_filter, "[vout]", 1080, 1920), 1080, 1920
         return composited(f"[0:v]{video_filter}[base]", "[base]", 1080, 1920), 1080, 1920
@@ -1887,6 +2112,50 @@ def render_reframed_clip_ffmpeg(
         str(output_path),
     ]
     return run_ffmpeg_command(command).returncode == 0, 1080, 1920
+
+
+def _render_fx_chain(
+    input_path: Path,
+    output_path: Path,
+    head: str,
+    head_label: str,
+    out_w: int,
+    out_h: int,
+    overlays: List[Dict[str, Any]],
+    subtitle_ass_path: Optional[Path],
+    fonts_dir: Optional[Path],
+    fx_request: Any,
+    fx_report: Optional[Dict[str, Any]],
+    *,
+    tail: str,
+    encode_args: List[str],
+    has_audio: bool,
+) -> bool:
+    """One ``run_fx_chain`` render of a ``composited()`` branch. Per-render files go next to the output."""
+    from .fx_chain import run_fx_chain
+
+    options = fx_report if fx_report is not None else {}
+    result = run_fx_chain(
+        input_path=input_path,
+        output_path=output_path,
+        head=head,
+        head_label=head_label,
+        out_w=out_w,
+        out_h=out_h,
+        broll_overlays=overlays,
+        broll_inputs=broll_input_args(overlays),
+        subtitle_ass_path=subtitle_ass_path,
+        fonts_dir=fonts_dir,
+        request=fx_request,
+        mode=options.get("mode") or "full",
+        scratch_dir=Path(output_path).parent,
+        tail=tail,
+        encode_args=encode_args,
+        has_audio=has_audio,
+        should_cancel=options.get("should_cancel"),
+    )
+    options["result"] = result
+    return bool(result.ok)
 
 
 def caption_probe_plan(input_path: Path, output_format: str, vertical_plan=None) -> Tuple[str, str]:

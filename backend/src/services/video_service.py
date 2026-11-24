@@ -4,11 +4,16 @@ Video service - handles video processing business logic.
 
 import asyncio
 import copy
+import math
+import shutil
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 import logging
 import json
 import subprocess
+import time
 import uuid
 
 from ..stream_transfer import run_stream_download
@@ -42,6 +47,7 @@ from ..youtube_source import (
     materialize_clip_source,
     resolve_full_youtube_download,
     copy_transcript_sidecar,
+    download_range_audio,
     load_time_map,
     local_ranges_for,
     persist_cache_sidecar,
@@ -58,7 +64,30 @@ from ..video_utils import (
     keep_ranges_transcript_text,
     seconds_to_mmss,
     get_transcript_text_in_range,
+    get_absolute_words_in_range,
+    fx_broll_windows,
+    fx_junctions,
+    save_fx_render,
+    FX_HOOK_WINDOW_START,
 )
+from ..edit_fx import assets as fx_assets
+from ..edit_fx.beats import (
+    heuristic_beats,
+    reanchor_beats,
+    timeline_hash as beats_timeline_hash,
+    words_hash,
+    words_with_timing,
+)
+from ..edit_fx.beats_llm import plan_beats
+from ..edit_fx.compat import known_fields, log_dropped
+from ..edit_fx.contracts import EditBeats, EditStyle, FxPlan
+from ..edit_fx.jobs import FxJob, fx_active
+from ..edit_fx.reactions import attach_reactions, ensure_reaction_file, reactions_available
+from ..edit_fx.resolver import ResolveInput, resolve
+from ..edit_fx.rng import plan_seed
+from ..edit_fx.settings import read_edit_style
+from ..media.common import hook_title_window
+from ..media.fx_chain import FxRenderInput
 from ..broll import BRollSession, broll_configured, broll_overlays_for, plan_clip_broll
 from ..clip_source_map import (
     normalize_source_ranges,
@@ -71,6 +100,7 @@ from ..clip_duration import clip_duration
 from ..config import get_config
 from ..workflows.contracts import PlanCache, PlanContext, WorkflowResult, WorkflowSpec
 from ..workflows.durations import workflow_budget
+from ..media.fallback_window import SCAN_SECONDS as FALLBACK_SCAN_SECONDS
 from ..media.source_limits import normalize_source_media, probe_media_duration
 from ..media.upload_ingest import (
     materialize_stored_upload,
@@ -79,10 +109,13 @@ from ..media.upload_ingest import (
     upload_needs_remote_copy,
 )
 from ..media_storage import MediaStorage
+from ..source_range import SourceRange, cut_audio_range, private_link, shift_segment
+from ..media.mp4_fragments import fragmented_mp4_duration
 from ..media.ffmpeg import (
     cap_video_short_side,
     ffprobe_duration,
     ffprobe_video_size,
+    output_offsets_for_ranges,
     rendered_clip_duration,
     rendered_ranges_duration,
 )
@@ -107,6 +140,7 @@ from ..stream_source import (
     StreamSourceError,
     detect_stream_source,
     download_stream_audio,
+    download_stream_range_audio,
     download_stream_sections,
     download_stream_video,
 )
@@ -114,6 +148,388 @@ from ..stream_source import (
 logger = logging.getLogger(__name__)
 UPLOAD_URL_PREFIX = "upload://"
 OPENING_CONTEXT_SECONDS = 10.0
+# Probing an upload in storage happens inside the create-task request. Give up
+# well before the proxy in front of the API (60 s) so the caller gets an answer.
+UPLOAD_PROBE_TIMEOUT_SECONDS = 40
+
+
+def _probe_stored_duration(signed_url: str, started: float) -> float:
+    """Length of an upload in storage, within ``UPLOAD_PROBE_TIMEOUT_SECONDS`` of ``started``.
+
+    ffprobe reads only the container headers through ranged requests, except
+    for a fragmented MP4, where it reads every fragment. Its length comes from
+    the last fragments instead.
+    """
+    duration = fragmented_mp4_duration(signed_url)
+    if duration is not None:
+        return duration
+    remaining = UPLOAD_PROBE_TIMEOUT_SECONDS - (time.monotonic() - started)
+    return ffprobe_duration(signed_url, timeout=max(1, remaining))
+
+
+# --------------------------------------------------------------------------- dynamic edits planning (FINAL §6.1, §13.1)
+
+
+@dataclass
+class _FxPlanned:
+    """A clip's resolved effects, ready for the (synchronous) renderer."""
+    plan: FxPlan
+    beats: Optional[EditBeats]
+    words: List[Dict[str, Any]]
+    timing: str
+    rule: str                                  # how it was decided (logs, tests): reuse|re-resolve|reanchor|llm|heuristic|cached
+    face_track: Optional[Dict[str, Any]] = None
+    reaction_files: Dict[str, Path] = field(default_factory=dict)
+
+
+def fx_words_for_ranges(
+    transcript_data: Optional[Dict[str, Any]],
+    keep_ranges: List[tuple],
+    output_offsets: Optional[List[float]] = None,
+) -> List[Dict[str, Any]]:
+    """Words on the clip (S == E) timeline, each also carrying its source (A) times ``src_start``/``src_end``.
+
+    The same projection as ``get_words_for_keep_ranges`` (crossfade offsets included); the A times let beats
+    follow their words when a later cleanup change moves them (§13.1 re-anchoring).
+    """
+    if not transcript_data or not transcript_data.get("words") or not keep_ranges:
+        return []
+    ranges = normalize_source_ranges(keep_ranges)
+    offsets = list(output_offsets) if output_offsets is not None else output_offsets_for_ranges(ranges)
+    words: List[Dict[str, Any]] = []
+    for (keep_start, keep_end), offset in zip(ranges, offsets):
+        for word in get_absolute_words_in_range(transcript_data, keep_start, keep_end):
+            words.append({
+                "text": word["text"],
+                "start": round(offset + (word["start"] - keep_start), 3),
+                "end": round(offset + (word["end"] - keep_start), 3),
+                "src_start": round(float(word["start"]), 3),
+                "src_end": round(float(word["end"]), 3),
+            })
+    return words
+
+
+def fx_lines_for_ranges(
+    transcript_data: Optional[Dict[str, Any]],
+    keep_ranges: List[tuple],
+    output_offsets: Optional[List[float]] = None,
+) -> List[Dict[str, Any]]:
+    """Caption lines ``[{start, end, text}]`` on the clip timeline from the cached utterances (ms).
+
+    Used for approximate word timing when a provider gave no usable word times (G12): an utterance belongs to the
+    kept range holding its midpoint and is clipped to it.
+    """
+    if not transcript_data or not keep_ranges:
+        return []
+    ranges = normalize_source_ranges(keep_ranges)
+    offsets = list(output_offsets) if output_offsets is not None else output_offsets_for_ranges(ranges)
+    lines: List[Dict[str, Any]] = []
+    for utterance in transcript_data.get("utterances") or []:
+        try:
+            start = float(utterance.get("start")) / 1000.0
+            end = float(utterance.get("end")) / 1000.0
+        except (TypeError, ValueError):
+            continue
+        text = str(utterance.get("text") or "").strip()
+        if not text or end <= start:
+            continue
+        middle = (start + end) / 2.0
+        for (keep_start, keep_end), offset in zip(ranges, offsets):
+            if keep_start <= middle < keep_end:
+                lines.append({
+                    "start": round(offset + max(start, keep_start) - keep_start, 3),
+                    "end": round(offset + min(end, keep_end) - keep_start, 3),
+                    "text": text,
+                    # A times of the clipped line: approximate words get A times too, so beats can re-anchor.
+                    "src_start": round(max(start, keep_start), 3),
+                    "src_end": round(min(end, keep_end), 3),
+                })
+                break
+    return lines
+
+
+def _with_original_source_times(items: List[Dict[str, Any]], time_map) -> List[Dict[str, Any]]:
+    """``src_start``/``src_end`` moved from a section download's local timeline to the original source.
+
+    A partial YouTube download is a concatenation of sections, so its transcript is shifted onto the local file.
+    Beats keep A times in the original video, so a later re-render (another download, the full source) re-anchors.
+    """
+    if time_map is None:
+        return items
+    out: List[Dict[str, Any]] = []
+    for item in items:
+        copied = dict(item)
+        for key in ("src_start", "src_end"):
+            if copied.get(key) is not None:
+                copied[key] = round(float(time_map.to_original(float(copied[key]))), 3)
+        out.append(copied)
+    return out
+
+
+def _fx_timeline_hash(keep_ranges: List[tuple], output_offsets: Optional[List[float]], words: List[Dict[str, Any]],
+                      time_map) -> str:
+    """§13.1 ``timeline_hash`` with the ranges in the original video's time.
+
+    A section download's ``keep_ranges`` are positions in that download, which another download of the same clip
+    (another padding, more sections, the full file) lays out differently. Hashing the original-source ranges lets
+    a settings re-render of such a clip reuse or re-resolve its plan (rules 2/3) instead of re-anchoring (rule 4).
+    Without a time map (uploads, full downloads) the ranges are already source time and the hash is unchanged.
+    """
+    ranges = keep_ranges
+    if time_map is not None:
+        ranges = []
+        for start, end in time_map.to_original_ranges([(float(a), float(b)) for a, b in keep_ranges]):
+            # A range that crosses a stitched-section boundary in one download and not in another is the same
+            # stretch of the original video: join pieces that touch there.
+            if ranges and abs(start - ranges[-1][1]) < 1e-3:
+                ranges[-1] = (ranges[-1][0], end)
+            else:
+                ranges.append((start, end))
+    return beats_timeline_hash(ranges, output_offsets, words)
+
+
+def _fx_clip_seconds(keep_ranges: List[tuple], output_offsets: Optional[List[float]]) -> float:
+    """E duration of the stage-1 render before the probe clamp (AR-M13)."""
+    if output_offsets is not None:
+        return rendered_duration(keep_ranges, output_offsets)
+    return rendered_ranges_duration(keep_ranges)
+
+
+def _beats_redis():
+    """An async Redis client for the beat cache (``fx_beats:*``), or None. The cache is an optimisation only."""
+    try:
+        import redis.asyncio as redis_asyncio
+
+        config = get_config()
+        return redis_asyncio.Redis(
+            host=config.redis_host, port=config.redis_port, password=config.redis_password,
+            socket_connect_timeout=2, socket_timeout=5,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Beat cache unavailable: %s", exc)
+        return None
+
+
+async def _close_redis(client) -> None:
+    if client is None:
+        return
+    try:
+        await client.aclose()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _read_beats(raw: Any) -> Optional[EditBeats]:
+    """Lenient read of stored beats (checkpoint, sidecar). None when unreadable (AI-M9: never fatal)."""
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, EditBeats):
+            return raw
+        clean, dropped = known_fields(EditBeats, dict(raw))
+        log_dropped("fx.edit_beats", dropped)
+        return EditBeats.model_validate(clean)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fx_beats_unreadable (%s); planning again", exc)
+        return None
+
+
+def _read_plan(raw: Any) -> Optional[FxPlan]:
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, FxPlan):
+            return raw
+        clean, dropped = known_fields(FxPlan, dict(raw))
+        log_dropped("fx.edit_fx", dropped)
+        return FxPlan.model_validate(clean)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fx_plan_unreadable (%s); resolving again", exc)
+        return None
+
+
+async def _llm_beats(words: List[Dict[str, Any]], clip_seconds: float, timing: str, language: Optional[str]) -> EditBeats:
+    redis_client = _beats_redis()
+    try:
+        return await plan_beats(words, clip_seconds, timing=timing, language=language, redis=redis_client)
+    finally:
+        await _close_redis(redis_client)
+
+
+def _resolve_fx(
+    *,
+    words: List[Dict[str, Any]],
+    beats: EditBeats,
+    style: EditStyle,
+    template: str,
+    seed: int,
+    keep_ranges: List[tuple],
+    output_offsets: Optional[List[float]],
+    group_output_starts: Optional[List[Optional[float]]],
+    broll_placements: Optional[List[Dict[str, Any]]],
+    hook_title: Optional[str],
+    max_clip_seconds: Optional[float],
+) -> FxPlan:
+    """``resolve`` with the generation inputs of FINAL §6.1.2.3 (cuts at junction centres, passage breaks, B-roll
+    windows, the hook band, the built-in asset manifest). Pure apart from reading the committed manifest."""
+    duration = _fx_clip_seconds(keep_ranges, output_offsets)
+    cuts, breaks = fx_junctions(keep_ranges, output_offsets, group_output_starts)
+    index = fx_assets.load_index()
+    return resolve(
+        ResolveInput(
+            words=tuple(words),
+            beats=beats,
+            duration=duration,
+            cuts=tuple(cuts),
+            passage_breaks=tuple(breaks),
+            broll_windows=tuple(fx_broll_windows(broll_placements)),
+            hook_window=(FX_HOOK_WINDOW_START, hook_title_window(duration)) if hook_title else None,
+            max_clip_seconds=max_clip_seconds,
+            sfx_variants=fx_assets.sfx_variants(),
+            beds=index.beds,
+            bed_lengths=index.bed_lengths,
+            reactions_available=reactions_available(),
+        ),
+        style,
+        template,
+        seed,
+    )
+
+
+async def _attach_reaction_files(plan: FxPlan, scratch: Path) -> tuple[FxPlan, Dict[str, Path]]:
+    """GIPHY reactions for the plan (when opted in and configured), downloaded into the render's ``scratch``.
+    A reaction whose file is unavailable is dropped from the plan, so the sidecar describes what rendered."""
+    if not any(c.kind == "reaction" for c in plan.cues):
+        return plan, {}
+    if plan.style.reactions and reactions_available():
+        plan = await attach_reactions(plan, rng_seed=plan.seed)
+    files: Dict[str, Path] = {}
+    for cue in plan.cues:
+        if cue.kind != "reaction":
+            continue
+        path = await ensure_reaction_file(cue, scratch)
+        if path is not None:
+            files[cue.id] = path
+    missing = {c.id for c in plan.cues if c.kind == "reaction" and c.id not in files}
+    if missing:
+        plan = plan.model_copy(update={"cues": tuple(c for c in plan.cues if c.id not in missing)})
+    return plan, files
+
+
+async def plan_clip_fx(
+    *,
+    video_path: Path,
+    keep_ranges: List[tuple],
+    output_offsets: Optional[List[float]],
+    group_output_starts: Optional[List[Optional[float]]],
+    style: EditStyle,
+    template: str,
+    task_id: str,
+    clip_index: int,
+    hook_title: Optional[str],
+    max_clip_seconds: Optional[float],
+    broll: Optional[Awaitable[List[Dict[str, Any]]]] = None,
+    cached_beats: Optional[Dict[str, Any]] = None,
+    stored: Optional[Dict[str, Any]] = None,
+    recompute_cleanup: bool = False,
+) -> tuple[_FxPlanned, List[Dict[str, Any]]]:
+    """Decide a clip's effects in the async worker code (beats, resolve), never inside the sync renderer.
+
+    ``broll`` is the clip's B-roll planning, awaited concurrently with the beat model (generation). ``stored`` holds
+    a re-render's sidecar data (``edit_fx``, ``edit_beats``, ``edit_style``, ``face_track``) and applies the §13.1
+    rules; ``cached_beats`` are this clip's checkpoint beats (generation retry/resume). Returns the planned effects
+    and the B-roll placements.
+    """
+    transcript = await run_in_thread(load_cached_transcript_data, video_path)
+    time_map = await run_in_thread(load_time_map, video_path)
+    raw_words = _with_original_source_times(fx_words_for_ranges(transcript, keep_ranges, output_offsets), time_map)
+    lines = _with_original_source_times(fx_lines_for_ranges(transcript, keep_ranges, output_offsets), time_map)
+    words, timing = words_with_timing(raw_words, lines)
+    language = (transcript or {}).get("language_code") if isinstance(transcript, dict) else None
+    current_hash = _fx_timeline_hash(keep_ranges, output_offsets, words, time_map)
+    clip_seconds = _fx_clip_seconds(keep_ranges, output_offsets)
+    stored = stored or {}
+    seed = plan_seed(task_id, clip_index)
+
+    stored_plan = _read_plan(stored.get("edit_fx"))
+    stored_beats = _read_beats(stored.get("edit_beats"))
+    stored_style = stored.get("edit_style")
+    current_style = style.to_json()
+    if stored_plan is not None:
+        seed = stored_plan.seed
+
+    rule = ""
+    beats: Optional[EditBeats] = None
+    reuse_plan: Optional[FxPlan] = None
+    face_track = None
+    same_timeline = stored_beats is not None and stored_beats.timeline_hash == current_hash and bool(current_hash)
+
+    # §13.1 rule 2: nothing that shapes the plan changed → reuse it verbatim.
+    if (
+        stored_plan is not None
+        and same_timeline
+        and not recompute_cleanup
+        and isinstance(stored_style, dict)
+        and read_edit_style(stored_style).to_json() == current_style
+        and stored_plan.template == template
+    ):
+        reuse_plan, beats, rule = stored_plan, stored_beats, "reuse"
+        face_track = stored.get("face_track") or None
+    elif same_timeline:
+        # Rule 3: same timeline, another style or template → re-resolve with the stored seed (no model call).
+        beats, rule = stored_beats, "re-resolve"
+        face_track = stored.get("face_track") or None
+    elif stored_beats is not None:
+        # Rule 4: the timeline moved → beats follow their source words (swears re-derived on the new words).
+        moved = reanchor_beats(stored_beats, words)
+        if moved is not None:
+            beats, rule = moved, "reanchor"
+
+    async def no_broll() -> List[Dict[str, Any]]:
+        return []
+
+    cached = _read_beats(cached_beats) if beats is None and reuse_plan is None else None
+    if cached is not None and cached.words_hash == words_hash(words):
+        beats, rule = cached, "cached"
+
+    if beats is None and reuse_plan is None:
+        if style.active:
+            # Rule 5: the beat model, concurrently with B-roll planning.
+            beats, placements = await _gather_beats(
+                _llm_beats(words, clip_seconds, timing, language), broll or no_broll()
+            )
+            rule = "llm"
+        else:
+            # Rule 6 / style only: deterministic beats, no model call.
+            beats, rule = heuristic_beats(words, timing=timing), "heuristic"
+            placements = await (broll or no_broll())
+    else:
+        placements = await (broll or no_broll())
+
+    if beats is not None:
+        beats = beats.model_copy(update={"timeline_hash": current_hash})
+    if reuse_plan is not None:
+        plan = reuse_plan
+    else:
+        plan = _resolve_fx(
+            words=words, beats=beats, style=style, template=template, seed=seed, keep_ranges=keep_ranges,
+            output_offsets=output_offsets, group_output_starts=group_output_starts, broll_placements=placements,
+            hook_title=hook_title, max_clip_seconds=max_clip_seconds,
+        )
+    logger.info(
+        "fx_plan clip=%s rule=%s timing=%s beats=%d cues=%d intensity=%s template=%s",
+        clip_index + 1, rule, timing, len(beats.beats) if beats else 0, len(plan.cues), style.intensity, template,
+    )
+    return _FxPlanned(plan=plan, beats=beats, words=words, timing=timing, rule=rule, face_track=face_track), placements
+
+
+async def _ready(value):
+    return value
+
+
+async def _gather_beats(beats_coro, broll_coro):
+    beats, placements = await asyncio.gather(beats_coro, broll_coro)
+    return beats, placements
 
 
 async def resolve_upload_for_edit(video_service, url: str) -> Path:
@@ -126,6 +542,9 @@ async def resolve_upload_for_edit(video_service, url: str) -> Path:
     if opener is None:
         return await run_in_thread(video_service.resolve_local_video_path, url)
     return await opener(url)
+
+
+_private_link = private_link
 
 
 def _sync_plan_ranges(plan: Dict[str, Any], segments: List[Dict[str, Any]]) -> None:
@@ -147,6 +566,48 @@ def _sync_plan_ranges(plan: Dict[str, Any], segments: List[Dict[str, Any]]) -> N
                 item for item in items
                 if not isinstance(item, dict) or all(plays(r) for r in item.get("ranges") or [])
             ]
+
+
+SCORE_KEYS = ("hook_score", "engagement_score", "value_score", "shareability_score")
+
+
+def stored_segment_scores(segment: Dict[str, Any]) -> Dict[str, Any]:
+    """Scores of a segment that was stored as JSON, in the shape clips are saved with.
+
+    A checkpoint keeps the model's answer, with the scores nested under ``virality``. The shared
+    analysis cache keeps the render payload, where the same scores are top-level keys. Both are
+    read here, so a clip made from a cached analysis keeps its score and hook type.
+    """
+    virality = segment.get("virality")
+    if hasattr(virality, "model_dump"):
+        virality = virality.model_dump()
+    if isinstance(virality, dict) and virality:
+        return {
+            "virality_score": virality.get("total_score", 0),
+            **{key: virality.get(key, 0) for key in SCORE_KEYS},
+            "hook_type": virality.get("hook_type"),
+        }
+    return {
+        "virality_score": segment.get("virality_score") or 0,
+        **{key: segment.get(key) or 0 for key in SCORE_KEYS},
+        "hook_type": segment.get("hook_type"),
+    }
+
+
+def cached_scores_were_lost(segments: List[Any]) -> bool:
+    """True for a cached analysis whose every moment carries a stored score of zero.
+
+    Until scores were read from both stored shapes, a run that started from the cache wrote the
+    analysis back with every score at zero. A moment the model picked never scores zero, and a
+    starter clip for a video without speech (``fallback``) has no score to lose.
+    """
+    stored = [segment for segment in segments if isinstance(segment, dict) and "virality_score" in segment]
+    if not stored or len(stored) != len(segments):
+        return False
+    return all(
+        not segment.get("virality_score") and not segment.get("hook_type") and not segment.get("virality")
+        for segment in stored
+    )
 
 
 class VideoService:
@@ -588,7 +1049,13 @@ class VideoService:
         """Create a bounded starter clip when AI analysis selects no segments."""
         fallback_duration = max(1.0, float(target_duration or 30))
         if video_duration and video_duration > 0:
-            fallback_duration = min(fallback_duration, max(1.0, video_duration))
+            # Never past the source's end: a 24.6s video plays 0-24.6s, not 0-25s.
+            fallback_duration = min(fallback_duration, float(video_duration))
+        # The segment spans more than the clip will be, so the render can look at the picture and end on a
+        # chapter instead of wherever the target length falls (media/fallback_window.py).
+        scan_duration = max(fallback_duration, FALLBACK_SCAN_SECONDS)
+        if video_duration and video_duration > 0:
+            scan_duration = min(scan_duration, float(video_duration))
 
         transcript_preview = " ".join((transcript or "").split())
         if len(transcript_preview) > 240:
@@ -596,7 +1063,11 @@ class VideoService:
 
         return {
             "start_time": "00:00",
-            "end_time": seconds_to_mmss(fallback_duration),
+            # MM:SS rounds, so the label floors to stay inside the source and
+            # the render plays the exact range.
+            "end_time": seconds_to_mmss(math.floor(scan_duration)),
+            "source_ranges": [[0.0, scan_duration]],
+            "fallback_seconds": fallback_duration,
             "text": transcript_preview,
             "relevance_score": 0.25,
             "reasoning": (
@@ -645,20 +1116,22 @@ class VideoService:
     @staticmethod
     def probe_upload_duration(url: str, user_id: str, storage_reference: str | None = None) -> float:
         """Read an uploaded video's length without downloading it."""
+        # Checking and signing the upload count against the probe budget: a
+        # store that rate-limits them is retried and can take several seconds.
+        started = time.monotonic()
         if url.startswith("upload://s3/"):
             storage = MediaStorage()
             reference = storage.validate_source(url, user_id)
-            # ffprobe reads only the container headers through ranged requests.
-            return ffprobe_duration(storage.signed_url(reference, "source.mp4", expires_in=300))
+            return _probe_stored_duration(storage.signed_url(reference, "source.mp4", expires_in=300), started)
         path = VideoService.resolve_local_video_path(url)
         if path.is_file():
-            return ffprobe_duration(path)
+            return fragmented_mp4_duration(path) or ffprobe_duration(path)
         # Local file and sidecar are both gone. The upload session still names
         # the durable object; ffprobe reads its headers through a signed URL.
         if storage_reference:
             storage = MediaStorage()
             if storage.enabled:
-                return ffprobe_duration(storage.signed_url(storage_reference, "source.mp4", expires_in=300))
+                return _probe_stored_duration(storage.signed_url(storage_reference, "source.mp4", expires_in=300), started)
         return ffprobe_duration(path)
 
     @staticmethod
@@ -788,7 +1261,7 @@ class VideoService:
     ) -> str:
         """
         Generate transcript from video using the configured provider
-        (assemblyai, whisper, or youtube_captions).
+        (assemblyai, soniox, whisper, or youtube_captions).
         Runs in thread pool to avoid blocking.
         """
         logger.info(f"Generating transcript for: {video_path}")
@@ -888,6 +1361,7 @@ class VideoService:
         max_short_side: Optional[int] = None,
         max_clip_seconds: float = 60.0,
         include_broll: bool = False,
+        fx_jobs: Optional[Dict[int, FxJob]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Create standalone video clips from segments with optional subtitles.
@@ -897,7 +1371,42 @@ class VideoService:
         Runs in thread pool as video processing is CPU-intensive.
         output_format: 'vertical' (9:16) or 'original' (keep source size, faster).
         add_subtitles: False skips subtitles; with original format uses ffmpeg stream copy (no re-encode).
+
+        ``fx_jobs`` (dynamic edits re-render, segment index → job; passed only when
+        set) decides every segment's effects here, in async code, by the §13.1
+        rules (reuse the stored plan, re-resolve, re-anchor, or plan beats), and
+        stores the ready plan in ``segment["edit_fx"]``. The synchronous batch
+        renderer only consumes it.
         """
+        if fx_jobs:
+            with tempfile.TemporaryDirectory(prefix="supoclip_fx_") as fx_scratch:
+                return await VideoService._create_video_clips(
+                    video_path, segments, font_family, font_size, font_color, caption_template, output_format,
+                    add_subtitles, cleanup_settings, max_short_side, max_clip_seconds, include_broll,
+                    fx_jobs, Path(fx_scratch),
+                )
+        return await VideoService._create_video_clips(
+            video_path, segments, font_family, font_size, font_color, caption_template, output_format,
+            add_subtitles, cleanup_settings, max_short_side, max_clip_seconds, include_broll, None, None,
+        )
+
+    @staticmethod
+    async def _create_video_clips(
+        video_path: Path,
+        segments: List[Dict[str, Any]],
+        font_family: Optional[str],
+        font_size: Optional[int],
+        font_color: Optional[str],
+        caption_template: str,
+        output_format: str,
+        add_subtitles: bool,
+        cleanup_settings: Optional[Dict[str, Any]],
+        max_short_side: Optional[int],
+        max_clip_seconds: float,
+        include_broll: bool,
+        fx_jobs: Optional[Dict[int, FxJob]],
+        fx_scratch: Optional[Path],
+    ) -> List[Dict[str, Any]]:
         logger.info(f"Creating {len(segments)} video clips subtitles={add_subtitles}")
         clips_output_dir = Path(get_config().temp_dir) / "clips"
         clips_output_dir.mkdir(parents=True, exist_ok=True)
@@ -937,6 +1446,11 @@ class VideoService:
         else:
             segments = [{**segment, "broll": [], "broll_overlays": []} for segment in segments]
 
+        if fx_jobs:
+            segments = await VideoService._plan_segments_fx(
+                video_path, segments, fx_jobs, caption_template, cleanup_settings, max_clip_seconds, fx_scratch,
+            )
+
         clips_info = await run_in_thread(
             create_clips_with_transitions,
             video_path,
@@ -950,6 +1464,7 @@ class VideoService:
             add_subtitles,
             cleanup_settings,
             max_clip_seconds=max_clip_seconds,
+            **({"fx_enabled": True} if fx_jobs else {}),
         )
 
         if max_short_side:
@@ -969,6 +1484,80 @@ class VideoService:
         return clips_info
 
     @staticmethod
+    async def _plan_segments_fx(
+        video_path: Path,
+        segments: List[Dict[str, Any]],
+        fx_jobs: Dict[int, FxJob],
+        caption_template: str,
+        cleanup_settings: Optional[Dict[str, Any]],
+        max_clip_seconds: float,
+        fx_scratch: Optional[Path],
+    ) -> List[Dict[str, Any]]:
+        """Resolve each segment's effects before the batch render (§6.1.3, §13.1).
+
+        Reads the segment's stored ``edit_fx``/``edit_beats``/``edit_style``/``face_track`` (loaded from the old
+        clip's sidecar) and writes the ready plan to ``edit_fx``, the beats to ``edit_beats``, the words to
+        ``fx_words``, downloaded reactions to ``fx_reaction_files``, and ``edit_style`` (the current style). A
+        segment whose job is missing or not FX-active renders legacy (rule 1) with its FX keys removed.
+        """
+        planned_segments: List[Dict[str, Any]] = []
+        for index, segment in enumerate(segments):
+            segment = dict(segment)
+            job = fx_jobs.get(index)
+            stored = {key: segment.pop(key, None) for key in ("edit_fx", "edit_beats", "edit_style", "face_track")}
+            segment.pop("edit_fx_warp", None)
+            for key in ("fx_words", "fx_reaction_files", "edit_style"):
+                segment.pop(key, None)
+            if job is None or not fx_active(job.style, caption_template):
+                # Rule 1: off + legacy template is checked first, so FX → legacy never resolves.
+                planned_segments.append(segment)
+                continue
+            try:
+                resolved = await run_in_thread(
+                    resolve_render_ranges,
+                    video_path,
+                    segment,
+                    cleanup_settings,
+                    float(segment.get("max_seconds") or max_clip_seconds),
+                )
+                planned, _ = await plan_clip_fx(
+                    video_path=video_path,
+                    keep_ranges=resolved.keep_ranges,
+                    output_offsets=resolved.output_offsets,
+                    group_output_starts=resolved.group_output_starts,
+                    style=job.style,
+                    template=caption_template,
+                    task_id=job.task_id,
+                    clip_index=job.clip_index,
+                    hook_title=burned_hook_title(segment),
+                    max_clip_seconds=float(segment.get("max_seconds") or max_clip_seconds),
+                    # Placements are already planned above; their windows keep cues off the cutaways.
+                    broll=_ready(list(segment.get("broll") or [])),
+                    stored=stored,
+                    cached_beats=job.cached_beats,
+                    recompute_cleanup=bool(segment.pop("fx_cleanup_recomputed", False)),
+                )
+                if planned.rule == "llm" and planned.beats is not None and job.on_beats is not None:
+                    try:
+                        await job.on_beats(job.clip_index, planned.beats.model_dump(mode="json"))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Could not checkpoint the beats of clip %d: %s", index + 1, exc)
+                plan, files = await _attach_reaction_files(planned.plan, fx_scratch or Path(get_config().temp_dir))
+            except Exception as exc:  # noqa: BLE001 - decorative layers never cost the clip (§0.4.7)
+                logger.warning("fx_planning_failed clip=%d (%s); rendering without effects", index + 1, exc)
+                planned_segments.append(segment)
+                continue
+            segment["edit_fx"] = plan.model_dump(mode="json")
+            segment["edit_beats"] = planned.beats.model_dump(mode="json") if planned.beats is not None else None
+            segment["edit_style"] = job.style.to_json()
+            segment["fx_words"] = planned.words
+            segment["fx_reaction_files"] = {cue_id: str(path) for cue_id, path in files.items()}
+            if planned.face_track:
+                segment["face_track"] = planned.face_track
+            planned_segments.append(segment)
+        return planned_segments
+
+    @staticmethod
     async def create_single_clip(
         video_path: Path,
         segment: Dict[str, Any],
@@ -985,13 +1574,52 @@ class VideoService:
         max_clip_seconds: float = 60.0,
         include_broll: bool = False,
         broll_session: Optional[BRollSession] = None,
+        fx: Optional[FxJob] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure.
 
         ``max_short_side`` downscales the finished clip for plans below 1080p.
         ``include_broll`` adds stock cutaways; ``broll_session`` keeps one
         task's clips from reusing the same footage.
+
+        ``fx`` (dynamic edits, passed only when active) plans the clip's beats
+        (checkpoint, beat model or heuristic) concurrently with B-roll, resolves
+        the effects here, renders them through the fx chain, and records the FX
+        sidecar keys; the returned ``clip_info`` then carries ``fx_meta``.
         """
+        if fx is not None:
+            with tempfile.TemporaryDirectory(prefix="supoclip_fx_") as fx_scratch:
+                return await VideoService._create_single_clip(
+                    video_path, segment, clip_index, output_dir, font_family, font_size, font_color,
+                    caption_template, output_format, add_subtitles, cleanup_settings, max_short_side,
+                    max_clip_seconds, include_broll, broll_session, fx, Path(fx_scratch),
+                )
+        return await VideoService._create_single_clip(
+            video_path, segment, clip_index, output_dir, font_family, font_size, font_color,
+            caption_template, output_format, add_subtitles, cleanup_settings, max_short_side,
+            max_clip_seconds, include_broll, broll_session, None, None,
+        )
+
+    @staticmethod
+    async def _create_single_clip(
+        video_path: Path,
+        segment: Dict[str, Any],
+        clip_index: int,
+        output_dir: Path,
+        font_family: Optional[str],
+        font_size: Optional[int],
+        font_color: Optional[str],
+        caption_template: str,
+        output_format: str,
+        add_subtitles: bool,
+        cleanup_settings: Optional[Dict[str, Any]],
+        max_short_side: Optional[int],
+        max_clip_seconds: float,
+        include_broll: bool,
+        broll_session: Optional[BRollSession],
+        fx: Optional[FxJob],
+        fx_scratch: Optional[Path],
+    ) -> Optional[Dict[str, Any]]:
         try:
             start_seconds, end_seconds = segment_bounds(segment)
             duration = end_seconds - start_seconds
@@ -1019,7 +1647,46 @@ class VideoService:
             start_seconds, end_seconds = resolved.bounds
 
             broll_placements: List[Dict[str, Any]] = []
-            if include_broll:
+            planned_fx: Optional[_FxPlanned] = None
+            if fx is not None:
+                # B-roll planning runs as its own task, so a failed FX plan still gets its placements once.
+                broll_task = asyncio.ensure_future(VideoService.plan_broll(
+                    video_path, keep_ranges, output_format, max_short_side, broll_session,
+                    **({"output_offsets": output_offsets} if output_offsets is not None else {}),
+                )) if include_broll else None
+                try:
+                    planned_fx, broll_placements = await plan_clip_fx(
+                        video_path=video_path,
+                        keep_ranges=keep_ranges,
+                        output_offsets=output_offsets,
+                        group_output_starts=resolved.group_output_starts,
+                        style=fx.style,
+                        template=caption_template,
+                        task_id=fx.task_id,
+                        clip_index=fx.clip_index,
+                        hook_title=burned_hook_title(segment),
+                        max_clip_seconds=max_clip_seconds,
+                        broll=broll_task,
+                        cached_beats=fx.cached_beats,
+                    )
+                    if planned_fx.rule == "llm" and planned_fx.beats is not None and fx.on_beats is not None:
+                        try:
+                            await fx.on_beats(fx.clip_index, planned_fx.beats.model_dump(mode="json"))
+                        except Exception as exc:  # noqa: BLE001 - the checkpoint only saves a model call on retry
+                            logger.warning("Could not checkpoint the beats of clip %d: %s", clip_index + 1, exc)
+                    plan, reaction_files = await _attach_reaction_files(planned_fx.plan, fx_scratch)
+                    planned_fx.plan = plan
+                    planned_fx.reaction_files = reaction_files
+                except Exception as exc:  # noqa: BLE001 - decorative layers never cost the clip (§0.4.7)
+                    logger.warning("fx_planning_failed clip=%d (%s); rendering without effects", clip_index + 1, exc)
+                    planned_fx = None
+                    broll_placements = []
+                    if broll_task is not None:
+                        try:
+                            broll_placements = await broll_task
+                        except Exception as broll_exc:  # noqa: BLE001
+                            logger.warning("B-roll planning failed for clip %d: %s", clip_index + 1, broll_exc)
+            elif include_broll:
                 broll_placements = await VideoService.plan_broll(
                     video_path, keep_ranges, output_format, max_short_side, broll_session,
                     **({"output_offsets": output_offsets} if output_offsets is not None else {}),
@@ -1047,6 +1714,11 @@ class VideoService:
                 broll_overlays=broll_overlays,
                 **({"output_offsets": output_offsets} if output_offsets is not None else {}),
                 **({"point_labels": point_labels} if point_labels else {}),
+                **({"fx": FxRenderInput(
+                    plan=planned_fx.plan,
+                    words=planned_fx.words,
+                    reaction_files=planned_fx.reaction_files,
+                )} if planned_fx is not None else {}),
             )
 
             if not success:
@@ -1070,6 +1742,16 @@ class VideoService:
             if render_report.get("caption_y") is not None:
                 from ..clip_source_map import save_clip_caption_settings
                 save_clip_caption_settings(clip_path, {"position_y": render_report["caption_y"], "position_is_center": True})
+            fx_meta = None
+            if planned_fx is not None:
+                # After the 720p cap (§0.4.3): the sidecar records the render, not the resolution.
+                fx_meta = save_fx_render(
+                    clip_path,
+                    style=fx.style.to_json(),
+                    beats=planned_fx.beats.model_dump(mode="json") if planned_fx.beats is not None else None,
+                    report=render_report,
+                    template=caption_template,
+                )
             # Store what plays, after crossfades and the resolution cap.
             cleaned_duration = await run_in_thread(
                 rendered_clip_duration, clip_path, keep_ranges, output_offsets
@@ -1098,6 +1780,7 @@ class VideoService:
                 "keep_ranges": keep_ranges,
                 "output_offsets": output_offsets,
                 "group_output_starts": resolved.group_output_starts,
+                **({"fx_meta": fx_meta} if fx_meta is not None else {}),
             }
         except Exception as e:
             logger.error(f"Error creating clip {clip_index + 1}: {e}")
@@ -1180,6 +1863,12 @@ class VideoService:
                     logger.info(
                         "Ignoring cached transcript analysis with fallback or empty clip segments"
                     )
+                elif cached_scores_were_lost(segments) and not (
+                    checkpoint.get("analysis") or checkpoint.get("candidates") or checkpoint.get("segments")
+                ):
+                    # Saved by a run that read an earlier cache entry without its scores. The moments are
+                    # still there but their ranking is not, so the video is analysed again.
+                    logger.info("Ignoring cached transcript analysis that lost its scores")
                 else:
 
                     class _SimpleResult:
@@ -1244,27 +1933,26 @@ class VideoService:
         transcript_data = load_cached_transcript_data(video_path)
         for segment in ([] if prepared_segments else raw_segments):
             if isinstance(segment, dict):
-                virality = segment.get("virality") or {}
-                if hasattr(virality, "model_dump"):
-                    virality = virality.model_dump()
                 segment_payload = {
                     "start_time": segment.get("start_time"),
                     "end_time": segment.get("end_time"),
                     "text": segment.get("text", ""),
                     "relevance_score": segment.get("relevance_score", 0.0),
                     "reasoning": segment.get("reasoning", ""),
-                    "virality_score": virality.get("total_score", 0),
-                    "hook_score": virality.get("hook_score", 0),
-                    "engagement_score": virality.get("engagement_score", 0),
-                    "value_score": virality.get("value_score", 0),
-                    "shareability_score": virality.get("shareability_score", 0),
-                    "hook_type": virality.get("hook_type"),
+                    **stored_segment_scores(segment),
                     "hook_title": segment.get("hook_title"),
                     "hook_start_time": segment.get("hook_start_time"),
                     "hook_end_time": segment.get("hook_end_time"),
                 }
                 if segment.get("opening_reviewed"):
                     segment_payload["opening_reviewed"] = True
+                if segment.get("hook_type") == "fallback":
+                    # A starter clip read back from an earlier analysis of the same video: it stays a
+                    # fallback, with the span to look in and its target length, not a 90-second selection.
+                    segment_payload["hook_type"] = "fallback"
+                    for key in ("source_ranges", "fallback_seconds"):
+                        if segment.get(key) is not None:
+                            segment_payload[key] = segment[key]
             else:
                 virality = segment.virality.model_dump() if segment.virality else {}
                 segment_payload = {
@@ -1314,14 +2002,21 @@ class VideoService:
             logger.warning(
                 "AI analysis selected no segments; using fallback clip window"
             )
-            segments_json = [
-                VideoService._build_fallback_segment(
-                    file_duration,
-                    transcript,
-                    (runtime_config.clip_duration if clip_length == "auto"
-                     else clip_duration(clip_length).ideal_minimum),
+            fallback = VideoService._build_fallback_segment(
+                file_duration,
+                transcript,
+                (runtime_config.clip_duration if clip_length == "auto"
+                 else clip_duration(clip_length).ideal_minimum),
+            )
+            if transcript_data:
+                # Exact source ranges keep their stored text, so it is the
+                # words they play rather than the transcript preview.
+                # ... of the target length; the render replaces it once it has chosen the clip.
+                start, end = 0.0, fallback["fallback_seconds"]
+                fallback["text"] = (
+                    get_transcript_text_in_range(transcript_data, start, end) or fallback["text"]
                 )
-            ]
+            segments_json = [fallback]
 
         return relevant_parts, segments_json, clip_limit, final_plan
 
@@ -1352,6 +2047,7 @@ class VideoService:
         plan_cache: Optional[PlanCache] = None,
         outline_cache_key: Optional[str] = None,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        source_range: Optional[SourceRange] = None,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -1365,10 +2061,19 @@ class VideoService:
 
         progress_callback: Optional function to call with progress updates
                           Signature: async def callback(progress: int, message: str, status: str)
+
+        ``source_range`` processes one picked part of the video. Only that
+        part's audio is transcribed and analysed (on its own timeline); the
+        selected segments are then moved onto the source's timeline, so every
+        clip carries original-video seconds. See ``source_range.py``.
         """
         video_path: Optional[Path] = None
         audio_first = False
         checkpoint = dict(checkpoint or {})
+        range_dir: Optional[Path] = None
+        if source_range is not None:
+            range_dir = Path(get_config().temp_dir) / "source-ranges" / f"{task_id or 'job'}-{uuid.uuid4().hex[:12]}"
+            range_dir.mkdir(parents=True, exist_ok=True)
 
         async def save_checkpoint(patch: Dict[str, Any]) -> None:
             if checkpoint_callback:
@@ -1377,11 +2082,20 @@ class VideoService:
 
         try:
             runtime_config = get_config()
-            duration_limit = (
-                runtime_config.max_video_duration
-                if max_video_duration is None
-                else max_video_duration
-            )
+            if max_video_duration is None:
+                configured = (
+                    runtime_config.max_video_duration
+                    if getattr(runtime_config, "monetization_enabled", True)
+                    else None
+                )
+                duration_limit = configured if configured and configured > 0 else None
+            else:
+                duration_limit = max_video_duration if max_video_duration > 0 else None
+            if source_range is not None and duration_limit and source_range.length > duration_limit + 1:
+                raise Exception(
+                    f"The selected part is too long ({int(source_range.length) // 60} min). "
+                    f"Maximum allowed duration is {duration_limit // 60} minutes."
+                )
             # Step 1: Get video path (download or use existing)
             if should_cancel and await should_cancel():
                 raise Exception("Task cancelled")
@@ -1415,7 +2129,7 @@ class VideoService:
                 if video_info:
                     duration = video_info.get("duration", 0)
                     source_duration = duration or None
-                    if duration and duration > duration_limit:
+                    if duration_limit and duration and duration > duration_limit and source_range is None:
                         mins = duration_limit // 60
                         raise Exception(
                             f"Video is too long ({duration // 60} min). "
@@ -1429,7 +2143,30 @@ class VideoService:
                 )
                 # Audio first only when a proxy is configured and we do not
                 # already have the full source cached. Uploads never reach here.
-                if proxy_configured(runtime_config) and video_id and not cached_full:
+                if source_range is not None and proxy_configured(runtime_config) and video_id and not cached_full:
+                    # Only the picked part's audio crosses the proxy. When it
+                    # can't be fetched, the full-file chain below is the fallback.
+                    try:
+                        video_path = await run_download_in_thread(
+                            download_range_audio, url, video_id, source_range,
+                            range_dir / "analysis.m4a", task_id=task_id, budget=job_budget,
+                            progress_callback=progress_callback,
+                        )
+                        audio_first = True
+                    except DownloadBudgetExceeded as exc:
+                        raise Exception(str(exc)) from exc
+                    except Exception as exc:
+                        logger.warning(
+                            "Audio of the selected part unavailable; downloading the full video: %s",
+                            public_download_error(exc),
+                        )
+                        report_download_recovery(DownloadRecovery.BACKUP)
+                        video_path = await VideoService.download_video(
+                            url, task_id=task_id, quality=download_quality, budget=job_budget,
+                            skip_proxy=True, progress_callback=progress_callback,
+                        )
+                        video_path = preserve_geo_restriction(video_path, exc if video_path is None else None)
+                elif proxy_configured(runtime_config) and video_id and not cached_full:
                     def _resolve_analysis():
                         def _download_full():
                             return resolve_full_youtube_download(
@@ -1473,11 +2210,17 @@ class VideoService:
                 # seeds that length), so no second metadata request is made here.
                 # Each provider checks the plan cap before downloading media.
                 try:
-                    video_path = await run_stream_download(
-                        download_stream_audio, url, None, task_id,
-                        max_duration=duration_limit, operation=PROCESSING_OPERATION,
-                            should_cancel=should_cancel,
-                    )
+                    if source_range is not None:
+                        video_path = await run_stream_download(
+                            download_stream_range_audio, url, source_range, task_id,
+                            operation=PROCESSING_OPERATION, should_cancel=should_cancel,
+                        )
+                    else:
+                        video_path = await run_stream_download(
+                            download_stream_audio, url, None, task_id,
+                            max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                                should_cancel=should_cancel,
+                        )
                     audio_first = True
                 except StreamSourceError:
                     # Too long, private, or every provider already failed: a
@@ -1486,8 +2229,10 @@ class VideoService:
                 except Exception as exc:
                     logger.warning("Stream audio download unavailable; using full video: %s", exc)
                     video_path = await run_stream_download(
-                        download_stream_video, url, None, task_id,
-                        max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                        download_stream_video, url,
+                        source_range.source_duration if source_range is not None else None, task_id,
+                        max_duration=None if source_range is not None else duration_limit,
+                        operation=PROCESSING_OPERATION,
                             should_cancel=should_cancel,
                     )
             else:
@@ -1501,8 +2246,10 @@ class VideoService:
                     raise Exception("Video file not found")
 
             # Post-download duration guard (catches cases where preflight info was unavailable)
-            file_duration = VideoService._get_file_duration(video_path)
-            if file_duration and file_duration > duration_limit:
+            # A full file fetched for a picked part is checked once the part is cut from it.
+            full_for_range = source_range is not None and not audio_first
+            file_duration = None if full_for_range else VideoService._get_file_duration(video_path)
+            if duration_limit and file_duration and file_duration > duration_limit:
                 mins = duration_limit // 60
                 raise Exception(
                     f"Video is too long ({int(file_duration) // 60} min). "
@@ -1519,6 +2266,14 @@ class VideoService:
             if progress_callback:
                 await progress_callback(15, "Preparing video...", "processing")
             video_path = await VideoService.prepare_source(video_path)
+            # The full file a picked part was cut from; clips render from it.
+            range_render_source: Optional[Path] = None
+            if full_for_range:
+                range_render_source = video_path
+                video_path = await run_in_thread(
+                    cut_audio_range, video_path, range_dir / "analysis.m4a", source_range,
+                )
+                file_duration = VideoService._get_file_duration(video_path)
 
             # Step 2: Generate transcript
             if should_cancel and await should_cancel():
@@ -1550,7 +2305,8 @@ class VideoService:
                 transcript = await VideoService.generate_transcript(
                     video_path,
                     processing_mode=processing_mode,
-                    source_url=url if source_type == "youtube" else None,
+                    # YouTube's own captions cover the whole video, not the part.
+                    source_url=url if source_type == "youtube" and source_range is None else None,
                 )
                 if checkpoint.get("analysis") or checkpoint.get("workflow_final"):
                     # Never combine new word timings with an old clip plan.
@@ -1642,6 +2398,14 @@ class VideoService:
             if workflow == "highlights" and not final_plan:
                 await save_checkpoint({"candidates": segments_json})
 
+            if source_range is not None and not final_plan:
+                # Analysis ran on the part's own timeline. Everything from here
+                # on (sections, render, stored clips) uses the source's.
+                segments_json = [shift_segment(segment, source_range.start) for segment in segments_json]
+            section_duration = (
+                source_range.source_duration if source_range is not None else file_duration
+            )
+
             if audio_first:
                 audio_path = video_path
                 if progress_callback:
@@ -1652,8 +2416,9 @@ class VideoService:
                 try:
                     if source_type in {"twitch", "kick"}:
                         video_path = await run_stream_download(
-                            download_stream_sections, url, segments_json, file_duration, task_id,
-                            max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                            download_stream_sections, url, segments_json, section_duration, task_id,
+                            max_duration=None if source_range is not None else duration_limit,
+                            operation=PROCESSING_OPERATION,
                             should_cancel=should_cancel,
                         )
                         # Shift word timings onto the stitched sections' timeline.
@@ -1664,7 +2429,7 @@ class VideoService:
                     else:
                         video_path = await run_download_in_thread(
                             materialize_clip_source, url, video_id, segments_json,
-                            task_id=task_id, budget=job_budget, duration=file_duration,
+                            task_id=task_id, budget=job_budget, duration=section_duration,
                             audio_path=audio_path, quality=download_quality,
                             progress_callback=progress_callback, progress=65,
                         )
@@ -1686,8 +2451,9 @@ class VideoService:
                     )
                     if source_type in {"twitch", "kick"}:
                         video_path = await run_stream_download(
-                            download_stream_video, url, file_duration, task_id,
-                            max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                            download_stream_video, url, section_duration, task_id,
+                            max_duration=None if source_range is not None else duration_limit,
+                            operation=PROCESSING_OPERATION,
                             should_cancel=should_cancel,
                         )
                     else:
@@ -1697,9 +2463,13 @@ class VideoService:
                             progress_callback=progress_callback, download_progress=65,
                         )
                         video_path = preserve_geo_restriction(video_path, section_error)
+                        if video_path and source_range is not None:
+                            # A shared full download never gets the part's word timings.
+                            video_path = await run_in_thread(_private_link, Path(video_path), range_dir)
                     if video_path and audio_path:
                         await run_in_thread(copy_transcript_sidecar, audio_path, video_path)
-                        await run_in_thread(persist_cache_sidecar, video_path)
+                        if source_range is None:
+                            await run_in_thread(persist_cache_sidecar, video_path)
                 if not video_path:
                     raise Exception("Failed to download selected segments") from section_error
                 # Transcription used the audio download. The picture is only
@@ -1708,6 +2478,17 @@ class VideoService:
                 if should_cancel and await should_cancel():
                     raise Exception("Task cancelled")
                 video_path = await VideoService.prepare_source(video_path)
+            elif range_render_source is not None:
+                # Render from the full file, through a private link that carries
+                # the part's word timings on the source's timeline.
+                # A VOD download belongs to this job's stream operation and is
+                # cleaned with it, so it takes the timings directly.
+                analysis_path = video_path
+                video_path = (
+                    range_render_source if source_type in {"twitch", "kick"}
+                    else await run_in_thread(_private_link, range_render_source, range_dir)
+                )
+                await run_in_thread(copy_transcript_sidecar, analysis_path, video_path)
 
             # The picture is only available now when analysis ran on audio.
             if workflow in ("highlights", "topic"):
@@ -1759,6 +2540,7 @@ class VideoService:
                     "segments": segments_json,
                     "segments_to_render": segments_json,
                     "video_path": str(video_path),
+                    "source_range_dir": str(range_dir) if range_dir else None,
                     "clips": [],
                     "summary": workflow_final["summary"],
                     "key_topics": workflow_final["key_topics"],
@@ -1774,6 +2556,7 @@ class VideoService:
                 "segments": segments_json,
                 "segments_to_render": segments_json,
                 "video_path": str(video_path),
+                "source_range_dir": str(range_dir) if range_dir else None,
                 "clips": [],
                 "summary": relevant_parts.summary if relevant_parts else None,
                 "key_topics": relevant_parts.key_topics if relevant_parts else None,
@@ -1790,6 +2573,8 @@ class VideoService:
             }
 
         except (Exception, asyncio.CancelledError) as e:
+            if range_dir is not None:
+                shutil.rmtree(range_dir, ignore_errors=True)
             if source_type == "youtube" and video_path is not None:
                 video_id = get_youtube_video_id(url)
                 if video_id:

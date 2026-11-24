@@ -44,6 +44,18 @@ class Config:
         self.assembly_ai_request_timeout_seconds = max(5, min(300, int(
             os.getenv("ASSEMBLY_AI_REQUEST_TIMEOUT_SECONDS", "60")
         )))
+        self.soniox_api_key = self._get_runtime_setting("SONIOX_API_KEY")
+        self.soniox_model = os.getenv("SONIOX_MODEL", "stt-async-v6").strip() or "stt-async-v6"
+        self.soniox_base_url = (
+            os.getenv("SONIOX_BASE_URL", "https://api.soniox.com").strip()
+            or "https://api.soniox.com"
+        ).rstrip("/")
+        self.soniox_http_timeout_seconds = max(30, min(7200, int(
+            os.getenv("SONIOX_HTTP_TIMEOUT_SECONDS", "900")
+        )))
+        self.soniox_request_timeout_seconds = max(5, min(300, int(
+            os.getenv("SONIOX_REQUEST_TIMEOUT_SECONDS", "60")
+        )))
         self.pexels_api_key = self._get_runtime_setting("PEXELS_API_KEY")
         self.apify_api_token = self._get_runtime_setting("APIFY_API_TOKEN")
         self.rapidapi_youtube_api_key = self._get_optional_env("RAPIDAPI_YOUTUBE_API_KEY")
@@ -104,20 +116,37 @@ class Config:
             os.getenv("APIFY_LONG_VIDEO_SECONDS", "1800")
         )
 
+        # Video duration limits apply only in hosted mode (SELF_HOST=false).
+        # Self-hosted instances are not limited by video length.
         self.max_video_duration = int(os.getenv("MAX_VIDEO_DURATION", "5400"))
-        # YouTube sources can be longer on paid tiers. Uploads continue to use
-        # max_video_duration regardless of plan.
+        # Per-video length cap for paid tiers, for every source (YouTube,
+        # Twitch, Kick and uploads). The names predate uploads following it.
         self.pro_youtube_max_video_duration = int(
-            os.getenv("PRO_YOUTUBE_MAX_VIDEO_DURATION", str(self.max_video_duration))
+            os.getenv("PRO_YOUTUBE_MAX_VIDEO_DURATION", "7200")
         )
         self.scale_youtube_max_video_duration = int(
             os.getenv("SCALE_YOUTUBE_MAX_VIDEO_DURATION", "10800")
         )
-        # 4 GB fits a full-length upload (the duration cap is 90 minutes) at a
-        # normal 1080p bitrate. Larger files make transcription, storage, and
-        # rendering slow and fragile.
+        self.team_youtube_max_video_duration = int(
+            os.getenv("TEAM_YOUTUBE_MAX_VIDEO_DURATION", "10800")
+        )
+        # Upload size cap without a paid plan, for self-hosted installs, and
+        # for the API-spooled `/upload` route (it writes to the API's own disk).
         self.max_video_upload_bytes = int(
             os.getenv("MAX_VIDEO_UPLOAD_BYTES", "4000000000")
+        )
+        # Paid plans upload straight to the bucket. Each cap fits a plan's
+        # longest video at about 66 Mbps, above a 4K60 phone or OBS recording,
+        # so the length limit is the one people meet. Sources above 1080p are
+        # scaled down before processing.
+        self.pro_max_video_upload_bytes = int(
+            os.getenv("PRO_MAX_VIDEO_UPLOAD_BYTES", "60000000000")
+        )
+        self.scale_max_video_upload_bytes = int(
+            os.getenv("SCALE_MAX_VIDEO_UPLOAD_BYTES", "90000000000")
+        )
+        self.team_max_video_upload_bytes = int(
+            os.getenv("TEAM_MAX_VIDEO_UPLOAD_BYTES", "90000000000")
         )
         self.output_dir = os.getenv("OUTPUT_DIR", "outputs")
 
@@ -158,6 +187,11 @@ class Config:
         self.media_orphan_grace_seconds = max(86400, int(os.getenv("MEDIA_ORPHAN_GRACE_SECONDS", "86400")))
         self.media_upload_concurrency = max(1, int(os.getenv("MEDIA_UPLOAD_CONCURRENCY", "3")))
         self.media_upload_daily_limit = max(1, int(os.getenv("MEDIA_UPLOAD_DAILY_LIMIT", "20")))
+        # A multipart upload with no activity for this long was abandoned (a
+        # closed tab never sends its abort). It stops holding a concurrency
+        # slot, and the cleanup worker aborts it. Finished parts count as
+        # activity, so a slow upload that keeps going is never cut off.
+        self.media_upload_stale_seconds = max(600, int(os.getenv("MEDIA_UPLOAD_STALE_SECONDS", "10800")))
         if self.media_storage == "s3" and not self.media_s3_bucket:
             raise ValueError("MEDIA_S3_BUCKET is required with MEDIA_STORAGE=s3")
 
@@ -165,6 +199,19 @@ class Config:
         self.redis_host = os.getenv("REDIS_HOST", "localhost")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.redis_password = self._get_optional_env("REDIS_PASSWORD")
+        # arq's own defaults (1s, no retry while running) crash a worker when a
+        # loaded host is slow to open a connection; see workers/redis_settings.py.
+        self.redis_connect_timeout_seconds = max(
+            1, self._get_int_env("REDIS_CONNECT_TIMEOUT_SECONDS", 10)
+        )
+        self.redis_connect_retries = max(
+            0, self._get_int_env("REDIS_CONNECT_RETRIES", 5)
+        )
+        # A reply slower than this means the connection is dead (e.g. Redis
+        # restarted behind a proxy); arq connections then reconnect and retry.
+        self.redis_socket_timeout_seconds = max(
+            1, self._get_int_env("REDIS_SOCKET_TIMEOUT_SECONDS", 30)
+        )
 
         # Fail-safe: queued tasks should not stay queued forever
         self.queued_task_timeout_seconds = int(
@@ -183,6 +230,9 @@ class Config:
         # an account render two videos at the same time.
         self.video_job_user_concurrency = max(
             1, self._get_int_env("VIDEO_JOB_USER_CONCURRENCY", 1)
+        )
+        self.video_job_team_concurrency = max(
+            1, self._get_int_env("VIDEO_JOB_TEAM_CONCURRENCY", 3)
         )
         self.video_job_defer_seconds = min(
             300, max(5, self._get_int_env("VIDEO_JOB_DEFER_SECONDS", 20))
@@ -215,6 +265,14 @@ class Config:
         # Monthly allowance in minutes of source video; 0 or less means unlimited.
         self.pro_plan_minute_limit = int(os.getenv("PRO_PLAN_MINUTE_LIMIT", "600"))
         self.scale_plan_minute_limit = int(os.getenv("SCALE_PLAN_MINUTE_LIMIT", "1500"))
+        self.team_included_seats = max(1, self._get_int_env("TEAM_PLAN_INCLUDED_SEATS", 3))
+        self.team_plan_minute_limit = int(os.getenv("TEAM_PLAN_MINUTE_LIMIT", "3600"))
+        self.team_extra_seat_minute_limit = max(
+            0, self._get_int_env("TEAM_EXTRA_SEAT_MINUTE_LIMIT", 900)
+        )
+        self.team_plan_ai_edit_limit = max(
+            0, self._get_int_env("TEAM_PLAN_AI_EDIT_LIMIT", 300)
+        )
         self.cors_origins = self._get_csv_env(
             "CORS_ORIGINS",
             [
@@ -377,7 +435,51 @@ class Config:
         subscription_status: str | None,
         subscription_provider: str | None = None,
     ) -> int:
-        """Return the YouTube duration cap granted by an active entitlement."""
+        """Return the per-video duration cap (any source) granted by an active entitlement."""
+        return self._plan_limit(
+            plan, subscription_status, subscription_provider,
+            default=self.max_video_duration,
+            pro=self.pro_youtube_max_video_duration,
+            scale=self.scale_youtube_max_video_duration,
+            team=self.team_youtube_max_video_duration,
+        )
+
+    def max_upload_bytes_for_plan(
+        self,
+        plan: str | None,
+        subscription_status: str | None,
+        subscription_provider: str | None = None,
+    ) -> int:
+        """Return the direct-upload size cap granted by an active entitlement."""
+        return self._plan_limit(
+            plan, subscription_status, subscription_provider,
+            default=self.max_video_upload_bytes,
+            pro=self.pro_max_video_upload_bytes,
+            scale=self.scale_max_video_upload_bytes,
+            team=self.team_max_video_upload_bytes,
+        )
+
+    @property
+    def upload_bytes_ceiling(self) -> int:
+        """Largest upload any plan allows; storage refuses anything bigger."""
+        return max(
+            self.max_video_upload_bytes,
+            self.pro_max_video_upload_bytes,
+            self.scale_max_video_upload_bytes,
+            self.team_max_video_upload_bytes,
+        )
+
+    @staticmethod
+    def _plan_limit(
+        plan: str | None,
+        subscription_status: str | None,
+        subscription_provider: str | None,
+        *,
+        default: int,
+        pro: int,
+        scale: int,
+        team: int,
+    ) -> int:
         status = (subscription_status or "").lower()
         provider = (subscription_provider or "").lower()
         # past_due keeps the cap only while Stripe is still retrying the invoice.
@@ -385,13 +487,16 @@ class Config:
             status == "past_due" and provider == "stripe"
         )
         if not entitled:
-            return self.max_video_duration
+            return default
+        return {"team": team, "scale": scale, "pro": pro}.get((plan or "").lower(), default)
 
-        if (plan or "").lower() == "scale":
-            return self.scale_youtube_max_video_duration
-        if (plan or "").lower() == "pro":
-            return self.pro_youtube_max_video_duration
-        return self.max_video_duration
+    def team_minute_limit_for_seats(self, seat_limit: int | None) -> int:
+        """Pooled monthly minute allowance for a Team plan with `seat_limit` seats."""
+        if self.team_plan_minute_limit <= 0:
+            return 0
+        seats = max(int(seat_limit or self.team_included_seats), self.team_included_seats)
+        extra_seats = max(seats - self.team_included_seats, 0)
+        return self.team_plan_minute_limit + extra_seats * self.team_extra_seat_minute_limit
 
     @staticmethod
     def _get_optional_env(name: str):
@@ -413,6 +518,7 @@ class Config:
     def as_runtime_settings(self) -> dict[str, str | None]:
         return {
             "ASSEMBLY_AI_API_KEY": self.assembly_ai_api_key,
+            "SONIOX_API_KEY": self.soniox_api_key,
             "LLM": self.llm,
             "OPENAI_API_KEY": self.openai_api_key,
             "OPENROUTER_API_KEY": self.openrouter_api_key,
@@ -485,7 +591,7 @@ class Config:
     @staticmethod
     def _normalize_transcription_provider(value: str | None) -> str:
         normalized = (value or "").strip().lower().replace("-", "_")
-        if normalized in ("whisper", "youtube_captions", "gemini"):
+        if normalized in ("gemini", "soniox", "whisper", "youtube_captions"):
             return normalized
         return "assemblyai"
 

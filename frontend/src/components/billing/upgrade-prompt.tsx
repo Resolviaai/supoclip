@@ -3,14 +3,16 @@
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { ArrowRight, Check, Clock, Loader2, X } from "lucide-react";
+import { ArrowRight, Check, Clock, Loader2, Server, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { CreatorCodeField } from "@/components/billing/creator-code-field";
-import { CapacityIllustration, FontIllustration, LengthIllustration } from "@/components/billing/upgrade-illustrations";
+import { UpgradeExamplesGallery } from "@/components/billing/upgrade-examples-gallery";
+import { CountUp, FontIllustration, LengthIllustration } from "@/components/billing/upgrade-illustrations";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { BillingSummary } from "@/hooks/use-billing-summary";
+import { useTeamRole } from "@/hooks/use-workspace";
 import {
   annualFullPrice,
   annualMonthlyEquivalent,
@@ -34,6 +36,8 @@ import { cn } from "@/lib/utils";
 export type UpgradeReason =
   | { kind: "start" }
   | { kind: "limit"; requiredMinutes?: number; remainingMinutes?: number }
+  // A team admin's limit for this member (0 = paused). A plan change does not lift it.
+  | { kind: "member_limit"; limit: number; remaining: number; requiredMinutes?: number }
   | { kind: "video_too_long"; durationSeconds: number; maxSeconds: number }
   | { kind: "custom_fonts" }
   | { kind: "explore" };
@@ -48,7 +52,31 @@ type UpgradeBilling = Pick<
   | "remaining_minutes"
   | "period_end"
   | "upgrade_required"
+  | "workspace_type"
+  | "team_id"
+  | "team_name"
+  | "seat_limit"
+  | "member_minute_limit"
+  | "member_remaining_minutes"
+  | "member_limit_reached"
 >;
+
+type MemberLimitBilling = Pick<BillingSummary, "member_minute_limit" | "member_remaining_minutes" | "member_limit_reached">;
+
+/**
+ * The prompt for a member stopped by their own team limit, or null when that limit is not
+ * what stands in the way. `requiredMinutes` is set when one video is longer than what is left.
+ */
+export function memberLimitReason(
+  billing: MemberLimitBilling | null | undefined,
+  requiredMinutes?: number,
+): Extract<UpgradeReason, { kind: "member_limit" }> | null {
+  const limit = billing?.member_minute_limit;
+  if (typeof limit !== "number") return null;
+  if (!billing?.member_limit_reached && limit !== 0) return null;
+  const remaining = Math.max(0, billing?.member_remaining_minutes ?? 0);
+  return { kind: "member_limit", limit, remaining, ...(requiredMinutes !== undefined ? { requiredMinutes } : {}) };
+}
 
 /**
  * Maps a backend error to the upgrade prompt that resolves it, or null when an
@@ -67,10 +95,19 @@ export function upgradeReasonForError(
           subscription_provider?: string | null;
           required_minutes?: number;
           remaining_minutes?: number | null;
+          member_minute_limit?: number | null;
+          member_remaining_minutes?: number | null;
+          member_limit_reached?: boolean;
         }
       | undefined;
     const isPaid = hasPaidAccess(billing?.plan, billing?.subscription_status, billing?.subscription_provider);
     if (!isPaid) return { kind: "start" };
+    // The member's own limit, not the plan's: say so instead of pairing the video with the team pool.
+    const memberLimit = memberLimitReason(
+      billing,
+      typeof billing?.required_minutes === "number" ? billing.required_minutes : undefined,
+    );
+    if (memberLimit) return memberLimit;
     // The video is longer than the minutes left this month.
     if (typeof billing?.required_minutes === "number" && typeof billing.remaining_minutes === "number") {
       return { kind: "limit", requiredMinutes: billing.required_minutes, remainingMinutes: billing.remaining_minutes };
@@ -137,17 +174,20 @@ export function useBillingPlanText() {
     return rest ? t("runtime.hoursMinutes", { hours, minutes: rest }) : t("runtime.hours", { count: hours });
   };
   const planName = (plan: string | null | undefined) => common(`plans.${billingPlanMessageKey(plan)}`);
+  const monthly = (plan: PublicBillingPlan) => t("highlights.minutes", { length: formatMinutes(plan.minuteLimit) });
+  const perVideo = (plan: PublicBillingPlan) => t("highlights.youtube", { length: formatMinutes(plan.youtubeMaxMinutes) });
+  // The two limits people run into come first: video a month, then the longest single video.
   const highlights = (plan: PublicBillingPlan) => [
-    t("highlights.minutes", { length: formatMinutes(plan.minuteLimit) }),
+    monthly(plan),
+    perVideo(plan),
     plan.resolution === "1080p" ? t("highlights.fullHd") : t("highlights.hd"),
-    t("highlights.youtube", { length: formatMinutes(plan.youtubeMaxMinutes) }),
     ...(plan.scheduling && socialPublishingStage() === "live" ? [t("highlights.scheduling")] : []),
     plan.id === "pro" ? t("highlights.fonts") : t("highlights.priority"),
   ];
   // Shown apart from the highlights with a "Coming soon" tag until publishing launches.
   const comingSoon = (plan: PublicBillingPlan) =>
     plan.scheduling && socialPublishingStage() === "soon" ? t("highlights.scheduling") : null;
-  return { t, common, formatMinutes, formatRuntime, planName, highlights, comingSoon };
+  return { t, common, formatMinutes, formatRuntime, planName, monthly, perVideo, highlights, comingSoon };
 }
 
 function copyFor(
@@ -160,8 +200,34 @@ function copyFor(
   const targetName = target ? text.planName(target.id) : undefined;
   const state = getUpgradeState(billing);
   const t = text.t;
+  const isTeam = billing?.workspace_type === "team" || billing?.plan === "team";
+  const team = billing?.team_name || text.planName("team");
   switch (reason.kind) {
+    case "member_limit":
+      return {
+        eyebrow: t("upgrade.member.eyebrow", { team }),
+        title:
+          reason.limit === 0
+            ? t("upgrade.member.pausedTitle")
+            : reason.requiredMinutes !== undefined && reason.remaining > 0
+              ? t("upgrade.member.titleShort", { required: reason.requiredMinutes, remaining: reason.remaining })
+              : t("upgrade.member.title", { limit: reason.limit }),
+        body:
+          reason.limit === 0
+            ? t("upgrade.member.pausedBody")
+            : t(state?.resetsOn ? "upgrade.member.bodyRefresh" : "upgrade.member.bodyPeriod", {
+                limit: reason.limit,
+                date: state?.resetsOn ?? "",
+              }),
+      };
     case "start":
+      if (isTeam) {
+        return {
+          eyebrow: t("upgrade.start.eyebrow"),
+          title: t("upgrade.teamStart.title", { team }),
+          body: t("upgrade.teamStart.body"),
+        };
+      }
       return {
         eyebrow: t("upgrade.start.eyebrow"),
         title: t("upgrade.start.title"),
@@ -233,9 +299,20 @@ export function UpgradeDialog({ open, onOpenChange, reason, billing, source }: U
   const text = useBillingPlanText();
   const settings = useTranslations("settings");
   const state = getUpgradeState(billing);
+  const isTeamWorkspace = billing?.workspace_type === "team" || billing?.plan === "team";
+  const teamRole = useTeamRole(isTeamWorkspace ? billing?.team_id : null);
+  // Only the owner can start the plan, add seats or fix a payment. Until the role is known, keep the link.
+  const canManageTeamBilling = teamRole === null || teamRole === "owner";
+  // An admin set this member's limit: nothing here can be bought, so there is nothing to offer.
+  const memberLimited = reason.kind === "member_limit";
+  const compact = Boolean(state?.needsPayment) || memberLimited;
   const allPlans = getPublicBillingPlans();
   // Free users choose between every plan; subscribers see their plan next to the step up.
-  const options: PublicBillingPlan[] = state?.isPaid ? (state.nextPlan ? [state.nextPlan] : []) : allPlans;
+  const options: PublicBillingPlan[] = isTeamWorkspace
+    ? []
+    : state?.isPaid
+      ? (state.nextPlan ? [state.nextPlan] : [])
+      : allPlans;
   const currentPlan = state?.isPaid ? allPlans.find((plan) => plan.id === billing?.plan) : undefined;
   const preferred = preferredPlan(reason, options);
   const [selected, setSelected] = useState<BillingPlanId | undefined>(preferred);
@@ -268,13 +345,13 @@ export function UpgradeDialog({ open, onOpenChange, reason, billing, source }: U
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className={cn("max-h-[calc(100dvh-2rem)] gap-0 overflow-x-hidden overflow-y-auto p-0", state?.needsPayment ? "max-w-lg" : "max-w-3xl sm:grid-cols-[1.1fr_1fr]")}>
+      <DialogContent showCloseButton={false} className={cn("max-h-[calc(100dvh-2rem)] gap-0 overflow-x-hidden overflow-y-auto p-0", compact ? "max-w-lg" : "max-w-3xl sm:grid-cols-[1.1fr_1fr]")}>
         <DialogClose className="absolute right-4 top-4 z-10 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
           <X className="size-4" />
           <span className="sr-only">{text.common("close")}</span>
         </DialogClose>
         <div className="flex flex-col p-6 sm:p-8">
-          {state?.needsPayment ? (
+          {state?.needsPayment && !memberLimited ? (
             <>
               <DialogTitle className="sr-only">{settings("paymentFailed.message")}</DialogTitle>
               <DialogDescription className="sr-only">{settings("paymentFailed.paused")}</DialogDescription>
@@ -287,8 +364,16 @@ export function UpgradeDialog({ open, onOpenChange, reason, billing, source }: U
             </>
           )}
 
-          {state?.needsPayment ? (
-            <PaymentFailedBanner className="mt-6" />
+          {memberLimited ? null : state?.needsPayment ? (
+            <PaymentFailedBanner className="mt-6" teamId={isTeamWorkspace ? billing?.team_id : undefined} />
+          ) : isTeamWorkspace ? (
+            <div className="mt-6 rounded-xl border bg-muted/40 p-4 text-sm text-muted-foreground">
+              <p>
+                {canManageTeamBilling
+                  ? text.t("teamWorkspaceBody", { team: billing?.team_name || text.planName("team") })
+                  : text.t("teamAskOwner", { team: billing?.team_name || text.planName("team") })}
+              </p>
+            </div>
           ) : state?.managedByAppStore ? (
             <p className="mt-6 rounded-xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
               {text.t("appStore")}
@@ -314,19 +399,35 @@ export function UpgradeDialog({ open, onOpenChange, reason, billing, source }: U
             </>
           )}
 
-          {!state?.isPaid && !state?.needsPayment && (
-            <Link
-              href="/blog/self-host-supoclip-docker"
-              className="mt-3 inline-flex items-center gap-1 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {text.t("selfHostLink")} <ArrowRight className="size-3" />
-            </Link>
+          {!state?.isPaid && !state?.needsPayment && !isTeamWorkspace && (
+            <div className="mt-3 rounded-lg border bg-muted/30 px-4 py-3">
+              <div className="flex items-center gap-3">
+                <Server className="size-4 shrink-0 text-muted-foreground" />
+                <p className="flex-1 text-sm font-semibold">{text.t("selfHosted.title")}</p>
+                <span className="text-sm font-semibold">{text.common("plans.free")}</span>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{text.t("selfHosted.body")}</p>
+              <Link
+                href="/blog/self-host-supoclip-docker"
+                className="mt-3 inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4 hover:text-muted-foreground"
+              >
+                {text.t("selfHosted.guide")} <ArrowRight className="size-3.5" />
+              </Link>
+            </div>
           )}
 
           {target && !state?.isPaid && !state?.needsPayment && <CreatorCodeField className="mt-4 self-start" />}
 
           <div className="mt-6 flex flex-col gap-2">
-            {target && !state?.managedByAppStore && !state?.needsPayment && (
+            {isTeamWorkspace && !state?.needsPayment && !memberLimited && canManageTeamBilling && (
+              <Button asChild size="lg" onClick={() => onOpenChange(false)}>
+                <Link href="/settings/team">
+                  {text.t("manageTeamSeats")}
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+            )}
+            {target && !isTeamWorkspace && !state?.managedByAppStore && !state?.needsPayment && (
               <Button size="lg" onClick={handleContinue} disabled={isRedirecting}>
                 {isRedirecting ? <Loader2 className="size-4 animate-spin" /> : null}
                 {isRedirecting ? text.t("openingCheckout") : text.t("continueWith", { name: text.planName(target.id) })}
@@ -334,7 +435,7 @@ export function UpgradeDialog({ open, onOpenChange, reason, billing, source }: U
               </Button>
             )}
             <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-muted-foreground">
-              {text.t("maybeLater")}
+              {memberLimited || (isTeamWorkspace && !canManageTeamBilling) ? text.common("close") : text.t("maybeLater")}
             </Button>
           </div>
           {target && !state?.managedByAppStore && !state?.needsPayment && (
@@ -344,7 +445,7 @@ export function UpgradeDialog({ open, onOpenChange, reason, billing, source }: U
           )}
         </div>
 
-        {!state?.needsPayment && <PlanShowcase reason={reason} plan={target ?? currentPlan} currentPlan={currentPlan} />}
+        {!compact && <PlanShowcase reason={reason} plan={target ?? currentPlan} currentPlan={currentPlan} />}
       </DialogContent>
     </Dialog>
   );
@@ -468,7 +569,7 @@ function PlanOption({
   );
 }
 
-/** The right-hand panel: an illustration for why the prompt opened, plus what the plan includes. */
+/** The right-hand panel: a reason-specific illustration or a live moving collage of real clips. */
 function PlanShowcase({
   reason,
   plan,
@@ -479,53 +580,87 @@ function PlanShowcase({
   currentPlan: PublicBillingPlan | undefined;
 }) {
   const text = useBillingPlanText();
-  return (
-    <div className="hidden flex-col border-l bg-muted/50 p-8 sm:flex">
-      <div className="flex flex-1 flex-col justify-center">
-        {plan &&
-          (reason.kind === "video_too_long" ? (
-            <LengthIllustration
-              durationSeconds={reason.durationSeconds}
-              currentLimitSeconds={reason.maxSeconds}
-              nextLimitSeconds={plan.youtubeMaxMinutes * 60}
-              durationLabel={text.formatRuntime(reason.durationSeconds)}
-              currentLabel={`${currentPlan ? text.planName(currentPlan.id) : text.t("illustration.today")} · ${text.formatMinutes(Math.round(reason.maxSeconds / 60))}`}
-              nextLabel={`${text.planName(plan.id)} · ${text.formatMinutes(plan.youtubeMaxMinutes)}`}
-            />
-          ) : reason.kind === "custom_fonts" ? (
-            <FontIllustration />
-          ) : (
-            <CapacityIllustration
-              key={plan.id}
-              from={currentPlan ? currentPlan.minuteLimit / 60 : 0}
-              to={plan.minuteLimit / 60}
-              label={
-                currentPlan
-                  ? text.t("illustration.hoursUpFrom", { count: currentPlan.minuteLimit / 60 })
-                  : text.t("illustration.hoursWith", { plan: text.planName(plan.id) })
-              }
-            />
-          ))}
-      </div>
+  const isSpecificIllustration = reason.kind === "video_too_long" || reason.kind === "custom_fonts";
 
+  if (isSpecificIllustration) {
+    return (
+      <div className="hidden flex-col border-l bg-muted/50 p-8 sm:flex">
+        <div className="flex flex-1 flex-col justify-center">
+          {plan &&
+            (reason.kind === "video_too_long" ? (
+              <LengthIllustration
+                durationSeconds={reason.durationSeconds}
+                currentLimitSeconds={reason.maxSeconds}
+                nextLimitSeconds={plan.youtubeMaxMinutes * 60}
+                durationLabel={text.formatRuntime(reason.durationSeconds)}
+                currentLabel={`${currentPlan ? text.planName(currentPlan.id) : text.t("illustration.today")} · ${text.formatMinutes(Math.round(reason.maxSeconds / 60))}`}
+                nextLabel={`${text.planName(plan.id)} · ${text.formatMinutes(plan.youtubeMaxMinutes)}`}
+              />
+            ) : (
+              <FontIllustration />
+            ))}
+        </div>
+
+        {plan && (
+          <ul className="mt-8 space-y-2 border-t pt-5">
+            {text.highlights(plan).map((highlight) => (
+              <li key={highlight} className="flex items-start gap-2 text-sm">
+                <Check className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                {highlight}
+              </li>
+            ))}
+            {text.comingSoon(plan) && (
+              <li className="flex items-start gap-2 text-sm text-muted-foreground">
+                <Clock className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  {text.comingSoon(plan)} <ComingSoonTag />
+                </span>
+              </li>
+            )}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  const hoursLabel = plan
+    ? currentPlan
+      ? text.t("illustration.hoursUpFrom", { count: currentPlan.minuteLimit / 60 })
+      : text.t("illustration.hoursWith", { plan: text.planName(plan.id) })
+    : null;
+  // Monthly hours are already the headline above, so keep the compact summary focused on the rest.
+  const compactHighlights = plan ? text.highlights(plan).slice(1) : [];
+
+  return (
+    <div className="hidden flex-col overflow-hidden border-l bg-muted/50 sm:flex">
       {plan && (
-        <ul className="mt-8 space-y-2 border-t pt-5">
-          {text.highlights(plan).map((highlight) => (
-            <li key={highlight} className="flex items-start gap-2 text-sm">
-              <Check className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              {highlight}
-            </li>
-          ))}
-          {text.comingSoon(plan) && (
-            <li className="flex items-start gap-2 text-sm text-muted-foreground">
-              <Clock className="mt-0.5 size-3.5 shrink-0" />
-              <span>
-                {text.comingSoon(plan)} <ComingSoonTag />
-              </span>
-            </li>
-          )}
-        </ul>
+        <div className="shrink-0 px-6 pb-3 pt-6">
+          <div className="flex items-baseline gap-2.5 pr-8">
+            <p className="font-display text-4xl font-bold leading-none tracking-tight tabular-nums">
+              <CountUp key={plan.id} from={currentPlan ? currentPlan.minuteLimit / 60 : 0} to={plan.minuteLimit / 60} />
+            </p>
+            <p className="text-sm leading-snug text-muted-foreground">{hoursLabel}</p>
+          </div>
+          <ul className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {compactHighlights.map((highlight) => (
+              <li key={highlight} className="inline-flex items-center gap-1">
+                <Check className="size-3 shrink-0 text-foreground/70" />
+                <span>{highlight}</span>
+              </li>
+            ))}
+            {text.comingSoon(plan) && (
+              <li className="inline-flex items-center gap-1">
+                <Clock className="size-3 shrink-0" />
+                <span>
+                  {text.comingSoon(plan)} <ComingSoonTag />
+                </span>
+              </li>
+            )}
+          </ul>
+        </div>
       )}
+
+      <UpgradeExamplesGallery className="min-h-[340px]" />
     </div>
   );
 }

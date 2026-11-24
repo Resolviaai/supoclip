@@ -15,8 +15,10 @@ vi.mock("@/lib/auth-client", () => ({
   }),
 }));
 
+const useSocialAccessMock = vi.fn(() => false);
+
 vi.mock("@/hooks/use-social-access", () => ({
-  useSocialAccess: () => false,
+  useSocialAccess: () => useSocialAccessMock(),
 }));
 
 vi.mock("@/lib/datafast", () => ({ track: vi.fn() }));
@@ -27,6 +29,7 @@ const preferences = {
   fontSize: 24,
   fontColor: "#FFFFFF",
   notifyOnCompletion: true,
+  notifyOnPublish: false,
 };
 
 function billing(overrides: Record<string, unknown>) {
@@ -79,6 +82,7 @@ describe("settings plan section", () => {
     } finally { confirm.mockRestore(); }
   });
   beforeEach(() => {
+    useSocialAccessMock.mockReturnValue(false);
     vi.stubGlobal("ResizeObserver", class {
       observe() {}
       unobserve() {}
@@ -126,5 +130,83 @@ describe("settings plan section", () => {
     expect(screen.getByRole("button", { name: "Manage Billing" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Choose Pro/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Upgrade" })).not.toBeInTheDocument();
+  });
+
+  it("hides publish email notifications when social publishing is unavailable", async () => {
+    useSocialAccessMock.mockReturnValue(false);
+    mockFetches(billing({}));
+    render(<SettingsPage />);
+
+    expect(await screen.findByLabelText(/Completion emails/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Publish emails/)).not.toBeInTheDocument();
+  });
+
+  it("toggles and saves publish email notifications when social publishing is enabled", async () => {
+    useSocialAccessMock.mockReturnValue(true);
+    const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("billing-summary")) return Response.json(billing({}));
+      if (url.includes("/api/preferences") && init?.method === "PATCH") {
+        return Response.json({ ...preferences, notifyOnPublish: true });
+      }
+      if (url.includes("/api/preferences")) return Response.json(preferences);
+      if (url.includes("/api/fonts")) return Response.json({ fonts: [] });
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", request);
+
+    render(<SettingsPage />);
+
+    const publishSwitch = await screen.findByRole("switch", { name: /Publish emails/ });
+    expect(publishSwitch).not.toBeChecked();
+
+    fireEvent.click(publishSwitch);
+    expect(publishSwitch).toBeChecked();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Save Preferences" }));
+
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "/api/preferences",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({
+            fontFamily: "TikTokSans-Regular",
+            fontSize: 24,
+            fontColor: "#FFFFFF",
+            notifyOnCompletion: true,
+            notifyOnPublish: true,
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("after checkout, looks again until the paid plan lands and then thanks on the plan card", async () => {
+    window.history.replaceState(null, "", "/settings?billing=success");
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    let summaryCalls = 0;
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("billing-summary")) {
+        summaryCalls += 1;
+        // The redirect beats Stripe's webhook: the first answer is still free.
+        return Response.json(summaryCalls === 1
+          ? billing({})
+          : billing({ plan: "pro", subscription_status: "active", subscription_provider: "stripe", billing_interval: "month" }));
+      }
+      if (url.includes("/api/preferences")) return Response.json(preferences);
+      if (url.includes("/api/fonts")) return Response.json({ fonts: [] });
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", request);
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole("button", { name: "Manage Billing" })).toBeInTheDocument();
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    expect(window.location.search).toBe("");
+    expect(summaryCalls).toBe(2);
   });
 });

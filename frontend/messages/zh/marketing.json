@@ -17,8 +17,8 @@
       "featureCrop": "人脸感知的 9:16 竖屏裁切",
       "featureCaptions": "逐词同步的动画字幕",
       "featureExports": "导出到 YouTube Shorts、TikTok 和 Instagram Reels",
-      "featureSelfHost": "非商业用途自托管",
-      "offerCategory": "提供非商业自托管源代码",
+      "featureSelfHost": "非商业用途和个人创作者可免费自托管",
+      "offerCategory": "提供供非商业用途和个人创作者自托管的源代码",
       "ios": "SupoClip iOS 应用：在 iPhone 上把长视频剪成带字幕的竖屏短片。",
       "website": "面向短视频内容的开源 AI 视频剪辑。"
     }
@@ -36,7 +36,7 @@
   },
   "footer": {
     "tagline": "开源 AI 视频剪辑工具。使用托管应用，或在你自己的基础设施上运行。",
-    "licenseNotice": "商业使用（包括企业内部使用）须获得<license>书面许可</license>。",
+    "licenseNotice": "个人创作者可以免费自托管并变现。公司、代理机构和付费托管须获得<license>书面许可</license>。",
     "github": "GitHub",
     "ios": "iOS 应用",
     "discord": "Discord 社区",
@@ -46,7 +46,7 @@
       "product": "产品"
     },
     "columnLinks": "{heading}链接",
-    "operator": "由 {company} 提供的产品。"
+    "operator": "SupoClip 由 {company} 运营。"
   },
   "creator": {
     "codeLead": "优惠码",
@@ -96,6 +96,18 @@
       "eyebrow": "自托管指南",
       "title": "用 Docker Compose 自托管 SupoClip",
       "description": "环境要求、环境变量、首次启动、完全本地的安装方式，以及上线前检查。"
+    },
+    "blog_supoclip_vs_opusclip_klap_vizard": {
+      "eyebrow": "Comparison",
+      "title": "SupoClip vs OpusClip vs Klap vs Vizard",
+      "label": "SupoClip vs OpusClip, Klap, Vizard",
+      "description": "Free plans, price per hour or clip, exports and publishing across four AI clippers."
+    },
+    "blog_free_opusclip_alternatives": {
+      "eyebrow": "Comparison",
+      "title": "Best free OpusClip alternatives",
+      "label": "Free OpusClip alternatives",
+      "description": "What the free tiers of hosted clippers include, and open-source tools with no watermark."
     },
     "blog_supoclip_vs_opusclip": {
       "label": "SupoClip vs OpusClip",
@@ -189,6 +201,9 @@
     },
     "faq": {
       "label": "常见问题"
+    },
+    "examples": {
+      "label": "示例片段"
     }
   },
   "nav": {
@@ -205,7 +220,8 @@
     "openHosted": "打开托管应用",
     "toggleMenu": "打开或关闭菜单",
     "publishing": "发布",
-    "faq": "常见问题"
+    "faq": "常见问题",
+    "examples": "示例"
   },
   "hero": {
     "badge": "开源，可自托管。也有 iPhone 版。",
@@ -316,6 +332,61 @@
         "description": "一键导出 Shorts、TikTok 和 Reels 格式，需要时自动加入空镜素材。"
       }
     }
+  },
+  "dynamicEdits": {
+    "eyebrow": "动态剪辑",
+    "title": "像专业剪辑师剪出来的片段",
+    "body": "选择剪辑强度，AI 会找出关键时刻，并配上字幕、推近镜头、音效和音乐。同一个片段，四种效果：播放时随时切换。",
+    "switcherLabel": "剪辑强度",
+    "intensity": {
+      "off": {
+        "label": "关闭",
+        "description": "干净的剪辑和你常用的字幕，不加任何效果。"
+      },
+      "subtle": {
+        "label": "轻微",
+        "description": "播客切片的感觉：偶尔换一下构图，底下垫着轻柔的音乐。"
+      },
+      "bold": {
+        "label": "强烈",
+        "description": "Hormozi 风格的推近镜头并保持住，逐字字幕把关键词放进色块，偶尔在剪切点加一下音效。"
+      },
+      "max": {
+        "label": "极致",
+        "description": "MrBeast 风格的醒目字幕，更多的重新构图和推镜，剪切点闪白，加上音效和背景音乐。"
+      }
+    },
+    "player": {
+      "label": "{intensity}强度的片段",
+      "play": "播放",
+      "pause": "暂停",
+      "mute": "静音",
+      "unmute": "打开声音",
+      "tapForSound": "点击开启声音"
+    },
+    "broll": {
+      "title": "极致强度，加 B-roll 素材",
+      "caption": "节目自带的空镜画面铺满竖屏，不再缩成一条细带，字幕、音效和音乐照常叠在上面。"
+    },
+    "points": {
+      "captions": {
+        "title": "逐字出现的字幕",
+        "description": "动画字幕样式可以把关键词放进色块、掉落一个表情符号，或者把一个词藏到说话人头部后面。脏话会被哔掉，并显示为 f***。"
+      },
+      "motion": {
+        "title": "踩着节奏推近和换构图",
+        "description": "AI 挑出关键的句子，画面就在那一刻推近、切到更近的景别或闪白。"
+      },
+      "sound": {
+        "title": "垫在人声下面的音效和音乐",
+        "description": "剪切点上的音效，加上贴合片段情绪的背景音乐，从舒缓到激烈，混在每个字的下面。"
+      },
+      "studio": {
+        "title": "一切都能再改",
+        "description": "可以修改已有片段的剪辑强度，也可以在剪辑工作室里微调单个效果。"
+      }
+    },
+    "source": "两段片段均由 SupoClip 根据 <link>{title}</link> 生成。"
   },
   "editor": {
     "eyebrow": "编辑器",
@@ -440,7 +511,28 @@
     },
     "publishPlatforms": "发布片段到 YouTube Shorts 和 TikTok",
     "schedulingPlatforms": "定时发布片段到 YouTube Shorts 和 TikTok",
-    "schedulingSoon": "定时发布到 Instagram"
+    "schedulingSoon": "定时发布到 Instagram",
+    "team": {
+      "badge": "团队与机构",
+      "description": "适合切片团队、MCN 机构及配备剪辑师的创作者。",
+      "seatAddon": "含 {seats} 个席位 · 额外席位 +${price}（+{hours} 小时）",
+      "seatsLabel": "{count} 个席位",
+      "decreaseSeats": "减少席位",
+      "increaseSeats": "增加席位",
+      "cta": "创建团队",
+      "features": {
+        "pooledHours": "每月 {hours} 小时共享视频时长",
+        "seats": "{seats} 个席位及共享切片库",
+        "quality": "Full HD {resolution} 切片 · 单个视频最长 {hours} 小时",
+        "sharedWorkspace": "社交定时发布与每月 {aiEdits} 次共享 AI 编辑",
+        "roles": "所有者、管理员与成员权限 + 更高并发处理",
+        "aiEdits": "每月 {aiEdits} 次共享 AI 编辑"
+      }
+    },
+    "limits": {
+      "monthly": "每月视频时长",
+      "perVideo": "单个视频最长"
+    }
   },
   "faq": {
     "eyebrow": "常见问题",
@@ -457,7 +549,7 @@
       },
       "minutes": {
         "question": "分钟数如何计算？",
-        "answer": "方案按处理的原视频分钟数计量，而不是按片段数。Pro 每月包含 {proHours} 小时，Creator 包含 {creatorHours} 小时。一个 30 分钟的视频消耗 30 分钟，无论剪出多少片段。额度每月重置，年付方案也一样。"
+        "answer": "方案按处理的原视频分钟数计量，而不是按片段数。Pro 每月包含 {proHours} 小时，Creator 包含 {creatorHours} 小时。一个 30 分钟的视频消耗 30 分钟，无论剪出多少片段。额度每月重置，年付方案也一样。单个视频在 Pro 上最长 {proMinutes} 分钟，在 Creator 上最长 {creatorMinutes} 分钟。"
       },
       "publishing": {
         "question": "SupoClip 能发布到 TikTok 和 Instagram 吗？",
@@ -473,7 +565,7 @@
       },
       "selfHost": {
         "question": "自托管真的免费吗？",
-        "answer": "SupoClip 允许非商业用途的自托管和分支。商业使用须事先获得 Shiori LLC 的书面许可。"
+        "answer": "SupoClip 允许非商业用途的自托管和分支；个人创作者也可以自托管，为自己的变现频道制作短片。公司、代理机构、客户委托工作和付费托管须事先获得 Shiori LLC 的书面许可。"
       },
       "cancel": {
         "question": "可以随时取消吗？",
@@ -484,11 +576,11 @@
   "openSource": {
     "badge": "SupoClip 非商业源代码许可",
     "title": "公开构建",
-    "body": "提供非商业自托管源代码",
+    "body": "提供供非商业用途和个人创作者自托管的源代码",
     "commandLabel": "自托管",
     "comment": "# 在 .env 中添加转录和 LLM 服务商",
     "facts": {
-      "license": "SupoClip 允许非商业用途的自托管和分支。商业使用须事先获得 Shiori LLC 的书面许可。",
+      "license": "SupoClip 允许非商业用途的自托管和分支；个人创作者也可以自托管，为自己的变现频道制作短片。公司、代理机构、客户委托工作和付费托管须事先获得 Shiori LLC 的书面许可。",
       "docker": "一条 Docker Compose 命令即可自行部署",
       "models": "自选模型：Gemini、OpenAI、Anthropic 或 Ollama"
     },
@@ -502,7 +594,7 @@
   },
   "cta": {
     "title": "你的下一条视频，已经是一周的内容。",
-    "body": "粘贴一个链接，看看 SupoClip 能找到什么。使用托管版应用，或为非商业用途免费自托管。"
+    "body": "粘贴一个链接，看看 SupoClip 能找到什么。使用托管版应用，或以非商业用途或个人创作者身份免费自托管。"
   },
   "faqPage": {
     "title": "语言、字幕与剪辑",

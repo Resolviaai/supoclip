@@ -29,13 +29,14 @@ from ...repositories.upload_repository import (
     claim_completion,
     completion_digest,
     release_completion,
+    touch_upload,
     UploadCompletionConflict,
     UploadIdempotencyConflict,
     UploadLimitReached,
 )
 from ...utils.async_helpers import run_in_thread
 from ...database import get_db
-from ...auth_headers import resolve_authenticated_user_id
+from ...auth_headers import AuthContext, resolve_auth_context, resolve_authenticated_user_id
 from ...services.billing_service import BillingService, grants_paid_access
 from starlette.formparsers import MultiPartException, MultiPartParser
 
@@ -67,6 +68,11 @@ MAX_FONT_UPLOAD_BYTES = 10 * 1024 * 1024
 async def _get_authenticated_user_id(request: Request, db: AsyncSession) -> str:
     config = get_config()
     return await resolve_authenticated_user_id(request, db, config)
+
+
+async def _get_auth_context(request: Request, db: AsyncSession) -> AuthContext:
+    """The caller and their verified active workspace (personal or a team)."""
+    return await resolve_auth_context(request, db, get_config())
 
 
 async def _read_limited_upload_form(request: Request, max_bytes: int):
@@ -217,9 +223,14 @@ async def upload_font(
 ):
     """Upload a custom .ttf/.otf font so it appears in the font picker."""
     try:
-        user_id = await _get_authenticated_user_id(request, db)
+        # Fonts stay with the person who uploaded them. The workspace only
+        # decides which plan pays for the feature.
+        auth_ctx = await _get_auth_context(request, db)
+        user_id = auth_ctx.user_id
         billing_service = BillingService(db)
-        summary = await billing_service.get_usage_summary(user_id)
+        summary = await billing_service.get_usage_summary(
+            user_id, team_id=auth_ctx.team_id
+        )
         paid_access = not summary.get("monetization_enabled") or grants_paid_access(
             summary.get("plan"),
             summary.get("subscription_status"),
@@ -350,11 +361,16 @@ async def get_available_transitions():
 
 
 @router.get("/caption-templates")
-async def get_caption_templates():
+async def get_caption_templates(include: str | None = None):
     """Get available caption templates.
 
     Returns a stable default list if optional template module is unavailable.
+    The default response lists the legacy templates only, so older clients
+    never see an id they can't render. ``?include=fx`` appends the animated
+    dynamic-edits templates (``fx: true`` and what they ``require``); clients ask
+    for them only when ``GET /tasks/edit-styles`` says dynamic edits are enabled.
     """
+    include_fx = "fx" in {part.strip().lower() for part in (include or "").split(",")}
     default_templates = [
         {
             "id": "default",
@@ -370,7 +386,7 @@ async def get_caption_templates():
     try:
         from ...caption_templates import get_template_info
 
-        templates = get_template_info()
+        templates = get_template_info(include_fx=True) if include_fx else get_template_info()
         return {"templates": templates or default_templates}
     except Exception:
         return {"templates": default_templates}
@@ -462,10 +478,20 @@ async def upload_video(request: Request, db: AsyncSession = Depends(get_db)):
             published.unlink(missing_ok=True)
 
 
+async def _plan_upload_bytes(db: AsyncSession, auth_ctx: AuthContext) -> int:
+    """Upload size cap for the caller's active workspace (personal or team)."""
+    summary = await BillingService(db).get_usage_summary(
+        auth_ctx.user_id, team_id=auth_ctx.team_id
+    )
+    limit = summary.get("max_upload_bytes")
+    return limit if isinstance(limit, int) and limit > 0 else get_config().max_video_upload_bytes
+
+
 @router.post("/upload/authorize")
 @media_work
 async def authorize_upload(request: Request, db: AsyncSession = Depends(get_db)):
-    user_id = await _get_authenticated_user_id(request, db)
+    auth_ctx = await _get_auth_context(request, db)
+    user_id = auth_ctx.user_id
     storage = MediaStorage()
     if not storage.enabled:
         return {"storage": "local"}
@@ -480,7 +506,8 @@ async def authorize_upload(request: Request, db: AsyncSession = Depends(get_db))
         content_type = payload.get("contentType") or "application/octet-stream"
         if not isinstance(content_type, str) or len(content_type) > 128:
             raise ValueError("Invalid content type")
-        session_id = await reserve_upload(db, user_id, size, storage.config)
+        max_bytes = await _plan_upload_bytes(db, auth_ctx)
+        session_id = await reserve_upload(db, user_id, size, storage.config, max_bytes=max_bytes)
         authorization = {}
         def begin():
             # Retain the SDK result even if cancellation prevents delivery of
@@ -514,7 +541,25 @@ async def refresh_upload_parts(request: Request, db: AsyncSession = Depends(get_
     try:
         payload = await request.json()
         session = await get_upload(db, user_id, payload)
-        return await run_in_thread(MediaStorage().refresh_upload_parts, user_id, payload, size=session.size)
+        storage = MediaStorage()
+        parts = await run_in_thread(storage.refresh_upload_parts, user_id, payload, size=session.size)
+        # A refresh means the browser is still sending parts.
+        await touch_upload(db, session.id, storage.config)
+        return parts
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.post("/upload/progress")
+async def report_upload_progress(request: Request, db: AsyncSession = Depends(get_db)):
+    """The browser finished a part: keep the upload's slot and stop cleanup aborting it."""
+    user_id = await _get_authenticated_user_id(request, db)
+    try:
+        payload = await request.json()
+        session = await get_upload(db, user_id, payload)
+        if not await touch_upload(db, session.id, MediaStorage().config):
+            raise ValueError("Upload expired or is unavailable; restart the upload")
+        return {"ok": True}
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from None
 
