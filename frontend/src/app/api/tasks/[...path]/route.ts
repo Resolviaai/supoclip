@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { createProxyResponse, fetchBackend } from "@/server/backend-api";
+import { createProxyResponse, createTextProxyResponse, fetchBackend } from "@/server/backend-api";
 import { getServerSession } from "@/server/session";
 
 /** Editor media served from this origin (canvas pixels must stay readable). */
@@ -80,7 +80,8 @@ async function proxyTaskRequest(
     response.headers.set("cache-control", "private, no-store");
     return response;
   }
-  return createProxyResponse(upstream);
+  const isJson = upstream.headers.get("content-type")?.includes("json");
+  return isJson ? createTextProxyResponse(upstream) : createProxyResponse(upstream);
 }
 
 export async function GET(

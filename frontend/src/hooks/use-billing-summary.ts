@@ -86,4 +86,3 @@ export function useBillingSummary(enabled: boolean) {
 
   return [enabled ? data ?? null : null, update] as const;
 }
-}
