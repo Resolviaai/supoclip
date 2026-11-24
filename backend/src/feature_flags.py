@@ -52,7 +52,7 @@ DEFAULT_FLAGS: dict[str, FeatureFlag] = {
     WORKFLOWS: FeatureFlag(WORKFLOWS, web_enabled=True, ios_enabled=True),
     TIKTOK_PUBLISHING: FeatureFlag(TIKTOK_PUBLISHING, admins_bypass=False),
     INSTAGRAM_PUBLISHING: FeatureFlag(INSTAGRAM_PUBLISHING),
-    DYNAMIC_EDITS: FeatureFlag(DYNAMIC_EDITS),
+    DYNAMIC_EDITS: FeatureFlag(DYNAMIC_EDITS, web_enabled=True, ios_enabled=True),
 }
 
 _cache: Optional[tuple[float, dict[str, FeatureFlag]]] = None

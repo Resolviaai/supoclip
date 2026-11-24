@@ -485,13 +485,13 @@ VALUES (
     false,
     false
 );
--- Dynamic edits stay off on web and iOS until rollout. Admins bypass the flag.
+-- Dynamic edits: edit intensity, SFX, music and animated caption styles
 INSERT INTO feature_flags (key, description, web_enabled, ios_enabled, admins_bypass)
 VALUES (
     'dynamic_edits',
     'Edit intensity, SFX, music and animated caption styles',
-    false,
-    false,
+    true,
+    true,
     true
 );
 -- Instagram Reels publishing stays off on web and iOS until Meta App Review passes. Admins bypass the flag.
